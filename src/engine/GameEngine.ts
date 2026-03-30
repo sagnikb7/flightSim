@@ -23,6 +23,7 @@ export class GameEngine {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer;
+  private clock: THREE.Clock;
   private terrain: TerrainManager;
   private ship: ShipController;
   private stars: THREE.Group;
@@ -106,6 +107,8 @@ export class GameEngine {
     pGeo.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3));
     this.particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x00ffff, size: 0.4, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending }));
     this.scene.add(this.particles);
+
+    this.clock = new THREE.Clock();
 
     this.setupLighting();
 
@@ -315,6 +318,12 @@ export class GameEngine {
   }
 
   public animate() {
+    const rawDt = this.clock.getDelta();
+    // Clamp dt to avoid spiral of death on tab-switch or lag spikes
+    const dt = Math.min(rawDt, 0.05);
+    // Scale factor: 1.0 at 60fps, 0.5 at 120fps, 2.0 at 30fps
+    const dtScale = dt * 60;
+
     if (this.isGameOver) {
       this.composer.render();
       return;
@@ -322,9 +331,9 @@ export class GameEngine {
 
     // Day/Night Cycle Logic
     if (CONFIG.day_night_cycle) {
-      this.dayNightTime = (this.dayNightTime + CONFIG.dayNightSpeed) % 1.0;
+      this.dayNightTime = (this.dayNightTime + CONFIG.dayNightSpeed * dtScale) % 1.0;
       const angle = this.dayNightTime * Math.PI * 2;
-      
+
       // Sun position arc
       const sunDist = 1000;
       this.sun.position.set(
@@ -336,10 +345,10 @@ export class GameEngine {
       // Sun height factor (0 at horizon, 1 at peak, -1 at midnight)
       const sunHeight = Math.sin(angle);
       const dayFactor = THREE.MathUtils.clamp(sunHeight * 2, 0, 1); // Sharper transition at horizon
-      
+
       // Adjust Ambient Light
       this.ambientLight.intensity = 0.1 + (dayFactor * 0.4);
-      
+
       // Adjust Sun Intensity (fades as it sets)
       this.sun.intensity = Math.max(0.1, dayFactor * 1.5);
 
@@ -348,7 +357,7 @@ export class GameEngine {
       const nightSky = new THREE.Color(0x000002);
       const horizonSky = new THREE.Color(0x1a0800); // Warm orange/brown tint
       const daySky = new THREE.Color(0x0a1a33); // Darker blue-ish for alien feel
-      
+
       let currentSky;
       if (sunHeight > 0.1) {
         currentSky = new THREE.Color().copy(horizonSky).lerp(daySky, (sunHeight - 0.1) * 2);
@@ -368,7 +377,7 @@ export class GameEngine {
       }
 
       // Stars Opacity (faint during day)
-      const starOpacity = 1.0 - (dayFactor * 0.9); 
+      const starOpacity = 1.0 - (dayFactor * 0.9);
       this.stars.children.forEach(layer => {
         const mat = (layer as THREE.Points).material as THREE.PointsMaterial;
         mat.opacity = starOpacity;
@@ -376,15 +385,15 @@ export class GameEngine {
     }
 
     if (this.isCrashing) {
-        this.crashTimer -= 0.016;
+        this.crashTimer -= dt;
         this.shakeTimer = Math.max(this.shakeTimer, 0.8);
-        
+
         // Fast camera roll
-        this.camera.rotation.z += 0.2;
-        
+        this.camera.rotation.z += 0.2 * dtScale;
+
         // Ship falls slightly
-        this.ship.group.position.y -= 0.8;
-  
+        this.ship.group.position.y -= 0.8 * dtScale;
+
         if (this.crashTimer <= 0) {
           this.isGameOver = true;
           this.onGameOver?.(this.crashReason);
@@ -400,7 +409,7 @@ export class GameEngine {
     this.points += deltaDist * pointsMultiplier;
 
     const alt = this.ship.group.position.y + 50;
-    
+
     // Proximity/Crash Detection
     const forward = new THREE.Vector3(0, 0, 10).applyQuaternion(this.ship.group.quaternion);
     const lookAheadPos = this.ship.group.position.clone().add(forward);
@@ -419,7 +428,7 @@ export class GameEngine {
         this.shakeTimer = Math.max(this.shakeTimer, 0.4);
     } else if (alt >= 150) {
         currentFuelDrain *= 10;
-        this.altGameOverTimer += 0.016;
+        this.altGameOverTimer += dt;
         this.altWarning = `PULL BACK IMMEDIATELY! ${Math.max(0, 3 - this.altGameOverTimer).toFixed(1)}s`;
         if (this.altGameOverTimer >= 3) this.triggerDeath("LOST IN UPPER ATMOSPHERE");
     } else if (alt >= 100) {
@@ -431,11 +440,11 @@ export class GameEngine {
     }
 
     if (!this.isCrashing) {
-        this.fuel -= currentFuelDrain;
+        this.fuel -= currentFuelDrain * dtScale;
         if (this.fuel <= 0) this.triggerDeath("FUEL EXHAUSTED");
 
         const speedBiomeMultiplier = this.terrain.getSpeedMultiplier();
-        this.ship.update(speedBiomeMultiplier);
+        this.ship.update(speedBiomeMultiplier, dtScale);
     }
 
     const idealPos = CONFIG.cameraOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
@@ -444,7 +453,7 @@ export class GameEngine {
       idealPos.x += (Math.random() - 0.5) * 5;
       idealPos.y += (Math.random() - 0.5) * 5;
       idealPos.z += (Math.random() - 0.5) * 5;
-      this.shakeTimer -= 0.016;
+      this.shakeTimer -= dt;
     }
     this.camera.position.lerp(idealPos, CONFIG.cameraLerp);
 
@@ -453,22 +462,22 @@ export class GameEngine {
     if (this.camera.position.y < terrainHeightAtCamera + 2) {
       this.camera.position.y = terrainHeightAtCamera + 2;
     }
-    
+
     // Maintain camera 'up' relative to ship for free-roam
     const shipUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.ship.group.quaternion);
     this.camera.up.lerp(shipUp, CONFIG.cameraLerp);
-    
+
     this.camera.lookAt(CONFIG.cameraLookAtOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position));
 
     this.terrain.fuelCells.forEach(f => {
-        f.rotation.y += 0.03;
+        f.rotation.y += 0.03 * dtScale;
         f.position.y += Math.sin(Date.now() * 0.003) * 0.05;
     });
-    
+
     this.terrain.update(this.ship.group.position, this.scene, dist2D);
     this.checkCollisions();
     this.updateParticles();
-    
+
     // Space objects and stars follow camera to stay "infinite"
     this.stars.position.copy(this.camera.position);
     this.spaceObjects.position.copy(this.camera.position);
@@ -476,9 +485,9 @@ export class GameEngine {
     // Rotate space objects (planets/moons)
     this.spaceObjects.children.forEach(obj => {
         if (obj instanceof THREE.Mesh && obj.userData.rotSpeed) {
-            obj.rotation.x += obj.userData.rotSpeed.x;
-            obj.rotation.y += obj.userData.rotSpeed.y;
-            obj.rotation.z += obj.userData.rotSpeed.z;
+            obj.rotation.x += obj.userData.rotSpeed.x * dtScale;
+            obj.rotation.y += obj.userData.rotSpeed.y * dtScale;
+            obj.rotation.z += obj.userData.rotSpeed.z * dtScale;
         }
     });
 
