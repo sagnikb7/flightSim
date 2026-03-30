@@ -136,18 +136,9 @@ export class ShipController {
     return group;
   }
 
-  public update(biomeMultiplier: number) {
+  public update(biomeMultiplier: number, dtScale: number = 1) {
     // Pitch: W (pull up) = -1, S (push down) = 1
     const pIn = (this.keys.w || this.keys.ArrowUp) ? -1 : (this.keys.s || this.keys.ArrowDown) ? 1 : 0;
-    
-    // // Track pitch velocity (rate of change of pitch input)
-    // // If input changed from 0 to -1 or 1, that's a sharp move
-    // if (pIn !== this.lastPitchInput && pIn !== 0) {
-    //   this.pitchVelocity = 0.5; // Trigger effect
-    // } else {
-    //   this.pitchVelocity = THREE.MathUtils.lerp(this.pitchVelocity, 0, 0.1);
-    // }
-    // this.lastPitchInput = pIn;
 
     // Roll: A (roll left) = 1, D (roll right) = -1
     const rIn = (this.keys.a || this.keys.ArrowLeft) ? 1 : (this.keys.d || this.keys.ArrowRight) ? -1 : 0;
@@ -167,15 +158,15 @@ export class ShipController {
 
     // "W" also adds thrust as requested
     const throttle = (this.keys.w || this.keys.ArrowUp) ? CONFIG.accelRate * 1.5 : 0;
-    
+
     if (isDiving) {
-        this.currentSpeed += CONFIG.accelRate + (Math.abs(forward.y) * CONFIG.gravitySpeedImpact);
+        this.currentSpeed += (CONFIG.accelRate + (Math.abs(forward.y) * CONFIG.gravitySpeedImpact)) * dtScale;
     } else if (isClimbing) {
-        this.currentSpeed -= (CONFIG.decelRate + (forward.y * CONFIG.gravitySpeedImpact)) - throttle;
+        this.currentSpeed -= ((CONFIG.decelRate + (forward.y * CONFIG.gravitySpeedImpact)) - throttle) * dtScale;
     } else {
         // Friction / drag towards cruise speed
-        this.currentSpeed += (CONFIG.cruiseSpeed - this.currentSpeed) * 0.01;
-        this.currentSpeed += throttle;
+        this.currentSpeed += (CONFIG.cruiseSpeed - this.currentSpeed) * 0.01 * dtScale;
+        this.currentSpeed += throttle * dtScale;
     }
 
     // Biome-based speed boost
@@ -183,30 +174,30 @@ export class ShipController {
 
     // Agility Logic: Harder to turn at extreme high speeds
     const speedFactor = 1.0 - THREE.MathUtils.smoothstep(this.currentSpeed, CONFIG.cruiseSpeed, CONFIG.maxSpeed) * 0.5;
-    
-    const pitchSpeed = 0.04 * speedFactor;
-    const rollSpeed = 0.065 * speedFactor;
-    const rudderSpeed = 0.02 * speedFactor;
-    const bankingTurnFactor = 0.025 * speedFactor;
+
+    const pitchSpeed = 0.04 * speedFactor * dtScale;
+    const rollSpeed = 0.065 * speedFactor * dtScale;
+    const rudderSpeed = 0.02 * speedFactor * dtScale;
+    const bankingTurnFactor = 0.025 * speedFactor * dtScale;
 
     // Natural "Dip" / Gravity effect on nose
     // This forces the player to constantly "pull up" slightly to maintain level flight
-    const naturalDip = 0.008 * speedFactor;
+    const naturalDip = 0.008 * speedFactor * dtScale;
 
     // Apply incremental rotations
-    // pIn is -1 for pull up, 1 for push down. 
+    // pIn is -1 for pull up, 1 for push down.
     // We add naturalDip to the final pitch change.
     this.group.rotateX(pIn * pitchSpeed + naturalDip);
     this.group.rotateZ(rIn * rollSpeed);
-    
+
     // Rudder + Natural Banking Turn
     const inducedYaw = rIn * bankingTurnFactor;
     this.group.rotateY(yIn * rudderSpeed + inducedYaw);
 
     // Constant forward movement in local forward direction
-    this.group.position.add(forward.multiplyScalar(this.currentSpeed * 0.01)); // Scale down for engine
+    this.group.position.add(forward.multiplyScalar(this.currentSpeed * 0.01 * dtScale)); // Scale down for engine
 
     // Reduced gravity for better flight feel
-    this.group.position.y -= CONFIG.gravity * 0.4; 
+    this.group.position.y -= CONFIG.gravity * 0.4 * dtScale;
   }
 }
