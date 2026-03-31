@@ -5,10 +5,15 @@ import { Upgrades } from './PersistenceService';
 export class ShipController {
   public group: THREE.Group;
   public currentSpeed: number = CONFIG.cruiseSpeed;
-  // public pitchVelocity: number = 0;
   private glowMat: THREE.MeshPhongMaterial;
   private keys: Record<string, boolean> = {};
-  // private lastPitchInput: number = 0;
+
+  // Device motion input (gyroscope/accelerometer)
+  private motionPitch: number = 0;
+  private motionRoll: number = 0;
+  public motionEnabled: boolean = false;
+  private baselineBeta: number | null = null;
+  private baselineGamma: number | null = null;
 
   constructor(upgrades: Upgrades) {
     this.glowMat = new THREE.MeshPhongMaterial({ 
@@ -24,6 +29,28 @@ export class ShipController {
   private setupInputs() {
     window.addEventListener('keydown', (e) => this.keys[e.key] = true);
     window.addEventListener('keyup', (e) => this.keys[e.key] = false);
+
+    window.addEventListener('deviceorientation', (e) => {
+      if (e.beta === null || e.gamma === null) return;
+
+      // Calibrate on first reading so current device position = neutral
+      if (this.baselineBeta === null) {
+        this.baselineBeta = e.beta;
+        this.baselineGamma = e.gamma;
+      }
+
+      this.motionEnabled = true;
+
+      const deltaBeta = e.beta - this.baselineBeta;
+      const deltaGamma = e.gamma - this.baselineGamma!;
+
+      // Dead zone of 3 degrees to prevent drift, ~30 degrees = full input
+      const deadZone = 3;
+      this.motionPitch = Math.abs(deltaBeta) < deadZone ? 0
+        : THREE.MathUtils.clamp((deltaBeta - Math.sign(deltaBeta) * deadZone) / 27, -1, 1);
+      this.motionRoll = Math.abs(deltaGamma) < deadZone ? 0
+        : THREE.MathUtils.clamp((deltaGamma - Math.sign(deltaGamma) * deadZone) / 27, -1, 1);
+    });
   }
 
   private createShip(skinColor: string): THREE.Group {
@@ -137,16 +164,20 @@ export class ShipController {
   }
 
   public update(biomeMultiplier: number, dtScale: number = 1) {
-    // Pitch: W (pull up) = -1, S (push down) = 1
-    const pIn = (this.keys.w || this.keys.ArrowUp) ? -1 : (this.keys.s || this.keys.ArrowDown) ? 1 : 0;
+    // Pitch: keyboard OR motion (whichever has larger magnitude)
+    const keyPitch = (this.keys.w || this.keys.ArrowUp) ? -1 : (this.keys.s || this.keys.ArrowDown) ? 1 : 0;
+    const pIn = Math.abs(this.motionPitch) > Math.abs(keyPitch) ? this.motionPitch : keyPitch;
 
-    // Roll: A (roll left) = 1, D (roll right) = -1
-    const rIn = (this.keys.a || this.keys.ArrowLeft) ? 1 : (this.keys.d || this.keys.ArrowRight) ? -1 : 0;
-    // Rudder (Yaw): Q (yaw left) = 1, E (yaw right) = -1
+    // Roll: keyboard OR motion (whichever has larger magnitude)
+    const keyRoll = (this.keys.a || this.keys.ArrowLeft) ? 1 : (this.keys.d || this.keys.ArrowRight) ? -1 : 0;
+    const rIn = Math.abs(this.motionRoll) > Math.abs(keyRoll) ? -this.motionRoll : keyRoll;
+
+    // Rudder (Yaw): Q (yaw left) = 1, E (yaw right) = -1 (keyboard only)
     const yIn = (this.keys.q) ? 1 : (this.keys.e) ? -1 : 0;
 
     // Thruster Glow Micro-interaction
-    const targetGlow = (this.keys.w || this.keys.ArrowUp) ? 8.0 : 2.0;
+    const isThrusting = this.keys.w || this.keys.ArrowUp || this.motionPitch < -0.3;
+    const targetGlow = isThrusting ? 8.0 : 2.0;
     this.glowMat.emissiveIntensity = THREE.MathUtils.lerp(this.glowMat.emissiveIntensity, targetGlow, 0.1);
 
     // Speed Logic
@@ -156,8 +187,8 @@ export class ShipController {
     const isClimbing = forward.y > 0.1;
     const isDiving = forward.y < -0.1;
 
-    // "W" also adds thrust as requested
-    const throttle = (this.keys.w || this.keys.ArrowUp) ? CONFIG.accelRate * 1.5 : 0;
+    // "W" or forward tilt also adds thrust
+    const throttle = isThrusting ? CONFIG.accelRate * 1.5 : 0;
 
     if (isDiving) {
         this.currentSpeed += (CONFIG.accelRate + (Math.abs(forward.y) * CONFIG.gravitySpeedImpact)) * dtScale;
