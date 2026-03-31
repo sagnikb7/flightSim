@@ -1,9 +1,0 @@
-{
-  "maxHealth": 100,
-  "maxFuel": 100,
-  "fuelDrainRate": 0.04,
-  "fuelReplenish": 35,
-  "fuelCanCount": 3,
-  "cameraLerp": 0.1,
-  "gravity": 0.075
-}

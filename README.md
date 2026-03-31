@@ -1,33 +1,103 @@
-# Low-Poly Flight Sim
+# VOIDRUNNER
 
-A high-performance, web-based third-person flight simulator featuring procedural infinite terrain, dynamic biomes, and realistic flight physics. Built with React, Three.js, and TypeScript.
+A high-performance, browser-based third-person space flight sim with procedurally generated infinite terrain, dynamic biomes, and momentum-based flight physics. Built with **Three.js**, **React**, and **TypeScript** — no game engine required.
 
-## Game Concepts
+Fly through alien landscapes at 360 km/h, dodge mountain ridges, dive into gorges, and chase plasma beams to stay alive. Every session generates a unique world.
 
-### 1. Procedural Terrain Generation
-The terrain is generated infinitely using a chunk-based system. Each chunk's elevation is calculated using **Multi-Octave Simplex Noise**.
+## Controls
 
-*   **Fractal Brownian Motion (FBM):** We layer multiple frequencies of noise on top of each other. Lower frequencies define the large shapes (hills), while higher frequencies add the fine low-poly details.
-*   **Ridged Noise Peaks:** For the Mountain biome, we use a specialized "ridged" noise function that creates sharp, aggressive peaks by inverting the absolute value of the noise.
-*   **Dynamic Biome Blending:** As you travel, the terrain parameters (frequency, amplitude, and noise type) are smoothly interpolated based on your radial distance from the origin. This ensures seamless transitions between flatlands, rolling hills, towering peaks, and deep canyons.
+| Key | Action |
+|-----|--------|
+| `W` / `Arrow Up` | Pitch up + thrust boost |
+| `S` / `Arrow Down` | Pitch down |
+| `A` / `Arrow Left` | Roll left |
+| `D` / `Arrow Right` | Roll right |
+| `Q` | Yaw left (rudder) |
+| `E` | Yaw right (rudder) |
 
-### 2. Flight Physics & Control
-The ship uses a 360-degree free-roaming flight model inspired by traditional aviation and open-world simulators.
+**Flight tips:**
+- Rolling into a turn automatically induces yaw (banking turn) — you rarely need Q/E.
+- Diving builds speed; climbing bleeds it. Use `W` during climbs for a thrust boost.
+- The ship has a natural nose-down tendency — keep pitching up to maintain altitude.
+- Fly through the cyan plasma beams to refuel. Flying closer to the base gives more fuel.
+- Stay below 120m altitude — higher altitudes drain plasma faster. Above 200m is a death sentence.
 
-*   **Aerodynamic Torque:** Rolling the aircraft automatically induces a "banking turn" (yaw torque), allowing for natural, fluid navigation without always needing rudder input.
-*   **Dynamic Speed & Energy:**
-    *   **Gravity Impact:** Diving converts altitude into kinetic energy, rapidly increasing your speed. Climbing works against gravity, causing the ship to lose momentum unless boosted.
-    *   **Integrated Thrust:** Pitching up with the primary controls provides a sustained engine boost to help maintain energy during steep climbs.
-*   **Agility Scaling:** Handling is dynamic. At lower cruise speeds, the ship is highly responsive and agile. At extreme high speeds (e.g., during a vertical dive), the control surfaces become "stiff," making it harder to pull out of maneuvers.
-*   **Natural Dip:** To keep the player engaged, the aircraft has a slight natural nose-down tendency, requiring constant active handling to maintain level flight—just like a real aircraft.
+## Getting Started
 
-### 3. Visuals & Performance
-*   **Low-Poly Aesthetic:** Every mesh is rendered with flat shading to emphasize its geometric facets.
-*   **Adaptive HUD:** Features real-time km/h conversion, proximity "PULL UP" warnings with haptic screen shake, and dynamic biome-based atmosphere (fog and sky) shifts.
+```bash
+# Install dependencies
+npm install
 
-## Development
-- **Dev:** `npm run dev`
-- **Build:** `npm run build`
-- **Preview:** `npm run preview`
+# Start dev server (hot reload)
+npm run dev
 
-Deployable to Netlify/Vercel with standard Vite build settings.
+# Production build
+npm run build
+
+# Preview production build
+npm run preview
+```
+
+Deployable to Netlify, Vercel, or any static host with standard Vite settings.
+
+## Tech Stack
+
+| | |
+|---|---|
+| **Rendering** | Three.js with post-processing (UnrealBloomPass) |
+| **UI** | React 18 |
+| **Language** | TypeScript |
+| **Bundler** | Vite |
+| **Terrain noise** | simplex-noise (2D) |
+
+## Project Structure
+
+```
+src/
+├── engine/
+│   ├── gameConfig.ts        ← All tunable parameters (start here!)
+│   ├── constants.ts         ← Biome definitions + config export
+│   ├── GameEngine.ts        ← Main loop, scene setup, collision, effects
+│   ├── ShipController.ts    ← Flight physics, input handling
+│   ├── TerrainManager.ts    ← Procedural terrain, biomes, rocks, craters
+│   ├── PlasmaRecharger.ts   ← Fuel beam stations + spawning logic
+│   ├── ShipModel.ts         ← Procedural ship mesh geometry
+│   ├── MusicManager.ts      ← Background music with crossfade
+│   └── PersistenceService.ts← User data, upgrades, localStorage
+├── components/
+│   └── ShipPreview.tsx      ← 3D ship preview for the shop UI
+└── App.tsx                  ← Game UI, HUD, menus, shop
+```
+
+## Configuration Reference
+
+All gameplay, physics, and visual parameters live in [`src/engine/gameConfig.ts`](src/engine/gameConfig.ts). Every value is commented — open it and start tweaking.
+
+| Section | What it controls | Example tweaks |
+|---------|-----------------|----------------|
+| `health` | Ship hull HP and upgrade scaling | Increase `max` for a more forgiving game |
+| `fuel` | Plasma drain rate, altitude penalties | Lower `drainRate` for longer flights |
+| `speed` | Min/max/cruise speed, acceleration, drag | Raise `max` for faster diving speeds |
+| `gravity` | Constant downward pull on the ship | Lower for a floatier, more arcadey feel |
+| `shipControls` | Pitch/roll/yaw torques, damping, agility | Raise `rollTorque` for snappier rolls |
+| `shipGlow` | Engine exhaust glow animation | Increase `thrustTarget` for brighter engines |
+| `camera` | FOV, chase distance, smoothing | Widen `offset` Z for a further camera |
+| `terrain` | Chunk size, noise params per biome type, rocks, craters | Raise `amp` in MOUNTAINS for taller peaks |
+| `terrain.biomes` | How long each biome lasts before changing | Lower `firstLength` for faster early transitions |
+| `plasmaRecharger` | Beam range, collection radius, spawn distance, difficulty ramp | Increase `collectionRadius` for easier pickups |
+| `altitude` | Warning/critical thresholds, death timer | Raise `criticalThreshold` to allow higher flight |
+| `visuals.bloom` | Glow post-processing intensity | Raise `baseStrength` for a more neon look |
+| `visuals.stars` | Starfield density, clustering, size tiers | Increase `minCount` for a denser sky |
+| `visuals.spaceObjects` | Planet/moon count, size, distance | Raise `maxCount` for a busier skybox |
+| `visuals.speedLines` | Motion streak particles | Increase `count` for denser speed trails |
+| `crash` | Death animation timing and camera roll | Increase `timerDuration` for a slower crash |
+| `motion` | Screen shake thresholds and intensity | Lower `shakeThreshold` for more frequent shake |
+| `upgrades` | Shop prices per upgrade tier | Adjust `costs` array to rebalance progression |
+
+## Game Mechanics
+
+For a deep dive into the algorithms behind terrain generation, flight physics, biome blending, starfield rendering, and more, see **[Game Mechanics](GAMEMECHANICS.md)**.
+
+## License
+
+MIT

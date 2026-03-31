@@ -155,38 +155,9 @@ export const ShipPreview: React.FC<ShipPreviewProps> = ({
   }, [skinColor, accentColor]);
 
   return (
-    <div style={{ position: 'relative' }}>
-      <div
-        ref={containerRef}
-        style={{
-          border: '2px solid #0ff',
-          borderRadius: '8px',
-          overflow: 'hidden',
-          cursor: 'grab',
-          userSelect: 'none',
-          boxShadow: '0 0 20px rgba(0, 255, 255, 0.3)'
-        }}
-        onMouseDown={(e) => {
-          e.currentTarget.style.cursor = 'grabbing';
-        }}
-        onMouseUp={(e) => {
-          e.currentTarget.style.cursor = 'grab';
-        }}
-      />
-      <div style={{
-        position: 'absolute',
-        bottom: '10px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        color: '#0ff',
-        fontSize: '0.7em',
-        textAlign: 'center',
-        pointerEvents: 'none',
-        textShadow: '0 0 5px #0ff',
-        fontFamily: 'monospace'
-      }}>
-        DRAG TO ROTATE
-      </div>
+    <div id="ship-preview-wrapper">
+      <div id="ship-preview-canvas" ref={containerRef} />
+      <div id="ship-preview-hint">DRAG TO ROTATE</div>
     </div>
   );
 };

@@ -10,7 +10,9 @@ import { PlasmaRechargerManager } from './PlasmaRecharger';
 
 export interface GameStats {
   health: number;
+  maxHealth: number;
   fuel: number;
+  maxFuel: number;
   points: number;
   speed: number;
   alt: number;
@@ -52,7 +54,7 @@ export class GameEngine {
   private maxHealth: number;
   private fuelDrainRate: number;
   private health: number;
-  private fuel = CONFIG.maxFuel;
+  private fuel = CONFIG.fuel.max;
   public points = 0;
   private isGameOver = false;
   private isCrashing = false;
@@ -78,36 +80,38 @@ export class GameEngine {
 
   constructor(container: HTMLElement, upgrades: Upgrades) {
     this.upgrades = upgrades;
-    this.maxHealth = CONFIG.maxHealth + (this.upgrades.maxHealth * 20); 
-    this.fuelDrainRate = CONFIG.fuelDrainRate * (1 - (this.upgrades.fuelEfficiency * 0.1)); 
+    this.maxHealth = CONFIG.health.max + (this.upgrades.maxHealth * CONFIG.health.upgradeBonus);
+    this.fuelDrainRate = CONFIG.fuel.drainRate * (1 - (this.upgrades.fuelEfficiency * CONFIG.fuel.upgradeEfficiency));
     this.health = this.maxHealth;
 
+    const { camera, visuals, terrain } = CONFIG;
+
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
+    this.camera = new THREE.PerspectiveCamera(camera.fov, window.innerWidth / window.innerHeight, camera.near, camera.far);
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    // Cap pixel ratio to 1.5 for consistent cross-browser performance
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, camera.pixelRatioCap));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    // Atmospheric fog for depth - adjusted for render distance
-    const fog = new THREE.FogExp2(0x000008, 0.0001);
+    // Atmospheric fog
+    const fog = new THREE.FogExp2(0x000008, visuals.fog.density);
     this.scene.fog = fog;
     this.renderer.setClearColor(0x000002);
 
-    this.sun = new THREE.DirectionalLight(0xffffff, 1.5);
-    this.sun.position.set(200, 50, 100);
+    const sunCfg = visuals.sun;
+    this.sun = new THREE.DirectionalLight(0xffffff, sunCfg.intensity);
+    this.sun.position.set(sunCfg.position[0], sunCfg.position[1], sunCfg.position[2]);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.width = 2048;
-    this.sun.shadow.mapSize.height = 2048;
-    this.sun.shadow.camera.left = -200;
-    this.sun.shadow.camera.right = 200;
-    this.sun.shadow.camera.top = 200;
-    this.sun.shadow.camera.bottom = -200;
-    this.sun.shadow.camera.near = 0.5;
-    this.sun.shadow.camera.far = 500;
+    this.sun.shadow.mapSize.width = sunCfg.shadowMapSize;
+    this.sun.shadow.mapSize.height = sunCfg.shadowMapSize;
+    this.sun.shadow.camera.left = -sunCfg.shadowBounds;
+    this.sun.shadow.camera.right = sunCfg.shadowBounds;
+    this.sun.shadow.camera.top = sunCfg.shadowBounds;
+    this.sun.shadow.camera.bottom = -sunCfg.shadowBounds;
+    this.sun.shadow.camera.near = sunCfg.shadowNear;
+    this.sun.shadow.camera.far = sunCfg.shadowFar;
     this.scene.add(this.sun);
 
     this.terrain = new TerrainManager(this.scene, fog, this.sun);
@@ -121,10 +125,10 @@ export class GameEngine {
     this.ship = new ShipController(this.upgrades);
     this.scene.add(this.ship.group);
 
-    // Spawn ship safely above terrain — terrain height at origin varies by biome
-    const spawnTerrainY = this.terrain.getHeight(0, 0) - 50;
-    // 35 units of clearance, capped at y=70 (alt=120) to stay below high-altitude warning
-    this.ship.group.position.y = THREE.MathUtils.clamp(spawnTerrainY + 35, 5, 70);
+    // Spawn ship safely above terrain
+    const spawnTerrainY = this.terrain.getHeight(0, 0) + terrain.groupYOffset;
+    const { spawnClearance, spawnMinY, spawnMaxY } = CONFIG.altitude;
+    this.ship.group.position.y = THREE.MathUtils.clamp(spawnTerrainY + spawnClearance, spawnMinY, spawnMaxY);
 
     this.stars = this.createStars();
     this.scene.add(this.stars);
@@ -133,17 +137,18 @@ export class GameEngine {
     this.scene.add(this.spaceObjects);
 
     // Initialize Particles
-    const pCount = 200;
+    const particleCfg = visuals.particles;
+    const pCount = particleCfg.count;
     const pGeo = new THREE.BufferGeometry();
     this.particlePositions = new Float32Array(pCount * 3);
     for(let i=0; i<pCount; i++) {
         this.particlePositions[i*3] = 0;
-        this.particlePositions[i*3+1] = -1000; 
+        this.particlePositions[i*3+1] = -1000;
         this.particlePositions[i*3+2] = 0;
         this.particleActive.push(false);
     }
     pGeo.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3));
-    this.particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x00ffff, size: 0.4, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending }));
+    this.particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x00ffff, size: particleCfg.size, transparent: true, opacity: particleCfg.opacity, blending: THREE.AdditiveBlending }));
     this.scene.add(this.particles);
 
     this.clock = new THREE.Clock();
@@ -155,16 +160,18 @@ export class GameEngine {
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
 
+    const bloomCfg = visuals.bloom;
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.8, // strength
-      0.3, // radius
-      0.8 // threshold
+      bloomCfg.baseStrength,
+      bloomCfg.radius,
+      bloomCfg.threshold
     );
     this.composer.addPass(this.bloomPass);
 
     // Speed lines for motion blur effect
-    const speedLineCount = 100;
+    const slCfg = visuals.speedLines;
+    const speedLineCount = slCfg.count;
     const speedGeo = new THREE.BufferGeometry();
     this.speedLinePositions = new Float32Array(speedLineCount * 3);
     this.speedLineVelocities = new Float32Array(speedLineCount * 3);
@@ -183,7 +190,7 @@ export class GameEngine {
       speedGeo,
       new THREE.PointsMaterial({
         color: 0x00ffff,
-        size: 0.8,
+        size: slCfg.size,
         transparent: true,
         opacity: 0,
         blending: THREE.AdditiveBlending
@@ -196,20 +203,20 @@ export class GameEngine {
 
   private createStars(): THREE.Group {
     const group = new THREE.Group();
-    // Randomized density: 2000 to 6000 stars
-    const starCount = 1000 + Math.floor(Math.random() * 3000);
-    
+    const starsCfg = CONFIG.visuals.stars;
+    const starCount = starsCfg.minCount + Math.floor(Math.random() * starsCfg.maxExtraCount);
+
     // Create organic focal points (clumps)
-    const clumps = Array.from({ length: 6 }, () => ({
+    const clumps = Array.from({ length: starsCfg.clumpCount }, () => ({
         theta: Math.random() * Math.PI * 2,
         phi: Math.acos(2 * Math.random() - 1),
-        spread: 0.3 + Math.random() * 0.5
+        spread: starsCfg.clumpSpreadMin + Math.random() * starsCfg.clumpSpreadRange
     }));
 
     const layers = [
-      { size: 1.2, color: 0xffffff, ratio: 0.6 }, // Tiny (was 0.7)
-      { size: 2.2, color: 0xeeeeee, ratio: 0.3 }, // Small (was 1.3)
-      { size: 3.8, color: 0xfafafa, ratio: 0.1 }  // Large/Bright (was 2.2)
+      { size: starsCfg.layers[0].size, color: 0xffffff, ratio: starsCfg.layers[0].ratio },
+      { size: starsCfg.layers[1].size, color: 0xeeeeee, ratio: starsCfg.layers[1].ratio },
+      { size: starsCfg.layers[2].size, color: 0xfafafa, ratio: starsCfg.layers[2].ratio }
     ];
 
     layers.forEach(layer => {
@@ -220,8 +227,7 @@ export class GameEngine {
       for (let i = 0; i < count; i++) {
         let theta, phi;
 
-        // 45% chance to cluster around a focal point for organic feel
-        if (Math.random() < 0.45) {
+        if (Math.random() < starsCfg.clusterChance) {
           const clump = clumps[Math.floor(Math.random() * clumps.length)];
           theta = clump.theta + (Math.random() - 0.5) * clump.spread;
           phi = clump.phi + (Math.random() - 0.5) * clump.spread;
@@ -230,22 +236,21 @@ export class GameEngine {
           phi = Math.acos(2 * Math.random() - 1);
         }
 
-        const r = 850 + Math.random() * 350; // Closer for fog visibility
+        const r = starsCfg.minRadius + Math.random() * starsCfg.radiusRange;
         const x = r * Math.sin(phi) * Math.cos(theta);
         const y = r * Math.sin(phi) * Math.sin(theta);
         const z = r * Math.cos(phi);
 
-        // Keep stars above the terrain horizon
-        if (y > -40) {
+        if (y > starsCfg.horizonCutoff) {
           vertices.push(x, y, z);
         }
       }
 
       geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-      const mat = new THREE.PointsMaterial({ 
-        color: layer.color, 
-        size: layer.size, 
-        transparent: true, 
+      const mat = new THREE.PointsMaterial({
+        color: layer.color,
+        size: layer.size,
+        transparent: true,
         opacity: 0.9,
         sizeAttenuation: true
       });
@@ -256,63 +261,60 @@ export class GameEngine {
   }
 
   private createSpaceObjects() {
-    const count = 1 + Math.floor(Math.random() * 5); // 2 to 4 planets/moons
+    const soCfg = CONFIG.visuals.spaceObjects;
+    const count = soCfg.minCount + Math.floor(Math.random() * soCfg.maxCount);
     for (let i = 0; i < count; i++) {
-        const dist = 1200 + Math.random() * 500;
+        const dist = soCfg.minDistance + Math.random() * soCfg.distanceRange;
         const angle = Math.random() * Math.PI * 2;
-        const height = 200 + Math.random() * 600;
-        
-        const size = 40 + Math.random() * 100;
+        const height = soCfg.minHeight + Math.random() * soCfg.heightRange;
+
+        const size = soCfg.minSize + Math.random() * soCfg.sizeRange;
         const geo = new THREE.IcosahedronGeometry(size, 1);
-        
-        // Brighter, more vibrant alien colors (higher saturation and lightness)
+
         const color = new THREE.Color().setHSL(Math.random(), 0.7, 0.7);
-        const mat = new THREE.MeshStandardMaterial({ 
-            color: color, 
+        const mat = new THREE.MeshStandardMaterial({
+            color: color,
             flatShading: true,
             emissive: color,
-            emissiveIntensity: 0.4 // Increased glow
+            emissiveIntensity: soCfg.emissiveIntensity
         });
-        
+
         const planet = new THREE.Mesh(geo, mat);
         planet.position.set(
             Math.cos(angle) * dist,
             height,
             Math.sin(angle) * dist
         );
-        
-        // Random initial rotation
+
         planet.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
-        
-        // Add custom rotation speed property
+
         (planet as any).userData.rotSpeed = {
-            x: (Math.random() - 0.5) * 0.002,
-            y: (Math.random() - 0.5) * 0.002,
-            z: (Math.random() - 0.5) * 0.002
+            x: (Math.random() - 0.5) * soCfg.rotationSpeed,
+            y: (Math.random() - 0.5) * soCfg.rotationSpeed,
+            z: (Math.random() - 0.5) * soCfg.rotationSpeed
         };
-        
+
         this.spaceObjects.add(planet);
     }
   }
 
   private setupLighting() {
-    // Hemisphere light for natural sky/ground ambient
-    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x5a4a3a, 0.5);
+    const { lighting } = CONFIG.visuals;
+    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x5a4a3a, lighting.hemisphereIntensity);
     this.scene.add(hemiLight);
-
-    // Soft ambient fill
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+    this.scene.add(new THREE.AmbientLight(0xffffff, lighting.ambientIntensity));
   }
 
   private triggerFuelEffect(pos: THREE.Vector3) {
+    const particleCfg = CONFIG.visuals.particles;
     let activated = 0;
-    for(let i=0; i<this.particleActive.length && activated < 50; i++) {
+    for(let i=0; i<this.particleActive.length && activated < particleCfg.activateCount; i++) {
         if(!this.particleActive[i]) {
             this.particleActive[i] = true;
             const angle = Math.random() * Math.PI * 2;
-            const dist = 5 + Math.random() * 5;
+            const dist = particleCfg.minSpawnRadius + Math.random() * (particleCfg.maxSpawnRadius - particleCfg.minSpawnRadius);
             this.particlePositions[i*3] = pos.x + Math.cos(angle) * dist;
-            this.particlePositions[i*3+1] = pos.y + (Math.random() - 0.5) * 5;
+            this.particlePositions[i*3+1] = pos.y + (Math.random() - 0.5) * particleCfg.heightSpread;
             this.particlePositions[i*3+2] = pos.z + Math.sin(angle) * dist;
             activated++;
         }
@@ -321,8 +323,8 @@ export class GameEngine {
 
   private updateShipGlow() {
     const glowTimer = this.plasmaManager.shipGlowTimer;
+    const glowCfg = CONFIG.visuals.shipGlow;
     if (glowTimer > 0) {
-      // Cache original materials on first glow frame
       if (this.shipOriginalMaterials.size === 0) {
         this.ship.group.traverse(obj => {
           if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
@@ -330,8 +332,7 @@ export class GameEngine {
           }
         });
       }
-      // Pulse emissive on all ship meshes
-      const intensity = glowTimer * 2.0; // fades out
+      const intensity = glowTimer * glowCfg.intensityMultiplier;
       this.ship.group.traverse(obj => {
         if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
           obj.material.emissive = new THREE.Color(0x66ccff);
@@ -339,7 +340,6 @@ export class GameEngine {
         }
       });
     } else if (this.shipOriginalMaterials.size > 0) {
-      // Restore original materials
       this.shipOriginalMaterials.forEach((origMat, mesh) => {
         if (mesh.material instanceof THREE.MeshStandardMaterial) {
           mesh.material.emissive = (origMat as THREE.MeshStandardMaterial).emissive;
@@ -351,6 +351,7 @@ export class GameEngine {
   }
 
   private updateParticles() {
+    const particleCfg = CONFIG.visuals.particles;
     const attr = this.particles.geometry.attributes.position as THREE.BufferAttribute;
     const target = this.ship.group.position;
     for(let i=0; i<this.particleActive.length; i++) {
@@ -358,10 +359,10 @@ export class GameEngine {
             const px = attr.getX(i);
             const py = attr.getY(i);
             const pz = attr.getZ(i);
-            attr.setX(i, px + (target.x - px) * 0.15);
-            attr.setY(i, py + (target.y - py) * 0.15);
-            attr.setZ(i, pz + (target.z - pz) * 0.15);
-            if(Math.abs(target.x - px) < 0.5 && Math.abs(target.y - py) < 0.5 && Math.abs(target.z - pz) < 0.5) {
+            attr.setX(i, px + (target.x - px) * particleCfg.lerp);
+            attr.setY(i, py + (target.y - py) * particleCfg.lerp);
+            attr.setZ(i, pz + (target.z - pz) * particleCfg.lerp);
+            if(Math.abs(target.x - px) < particleCfg.collectionThreshold && Math.abs(target.y - py) < particleCfg.collectionThreshold && Math.abs(target.z - pz) < particleCfg.collectionThreshold) {
                 this.particleActive[i] = false;
                 attr.setY(i, -1000);
             }
@@ -371,13 +372,12 @@ export class GameEngine {
   }
 
   private updateSpeedLines(motionIntensity: number) {
+    const slCfg = CONFIG.visuals.speedLines;
     const attr = this.speedLines.geometry.attributes.position as THREE.BufferAttribute;
     const material = this.speedLines.material as THREE.PointsMaterial;
 
-    // Fade in/out based on motion intensity
-    material.opacity = THREE.MathUtils.lerp(material.opacity, motionIntensity * 0.8, 0.1);
+    material.opacity = THREE.MathUtils.lerp(material.opacity, motionIntensity * slCfg.maxOpacity, 0.1);
 
-    // Only animate if visible
     if (material.opacity > 0.05) {
       const shipPos = this.ship.group.position;
       const shipForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.ship.group.quaternion);
@@ -387,23 +387,20 @@ export class GameEngine {
         const py = attr.getY(i);
         const pz = attr.getZ(i);
 
-        // Move lines backward relative to ship
         const newX = px + this.speedLineVelocities[i * 3] * motionIntensity;
         const newY = py + this.speedLineVelocities[i * 3 + 1] * motionIntensity;
         const newZ = pz + this.speedLineVelocities[i * 3 + 2] * motionIntensity * 2;
 
-        // Reset if too far behind
         const dist = Math.sqrt(
           Math.pow(newX - shipPos.x, 2) +
           Math.pow(newY - shipPos.y, 2) +
           Math.pow(newZ - shipPos.z, 2)
         );
 
-        if (dist > 50 || newZ < shipPos.z - 40) {
-          // Respawn in front of ship
-          const spreadX = (Math.random() - 0.5) * 30;
-          const spreadY = (Math.random() - 0.5) * 20;
-          const spreadZ = (Math.random() - 0.5) * 10;
+        if (dist > slCfg.respawnDistance || newZ < shipPos.z - slCfg.zCullOffset) {
+          const spreadX = (Math.random() - 0.5) * slCfg.spreadX;
+          const spreadY = (Math.random() - 0.5) * slCfg.spreadY;
+          const spreadZ = (Math.random() - 0.5) * slCfg.spreadZ;
 
           attr.setX(i, shipPos.x + shipForward.x * 20 + spreadX);
           attr.setY(i, shipPos.y + shipForward.y * 20 + spreadY);
@@ -420,18 +417,17 @@ export class GameEngine {
   }
 
   private checkCollisions() {
-    const terrainHeight = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) - 50;
-    if (this.ship.group.position.y < terrainHeight + 1) this.triggerDeath("CRASHED INTO TERRAIN");
+    const terrainHeight = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) + CONFIG.terrain.groupYOffset;
+    if (this.ship.group.position.y < terrainHeight + CONFIG.altitude.collisionOffset) this.triggerDeath("CRASHED INTO TERRAIN");
   }
 
   private triggerDeath(reason: string) {
     if (this.isGameOver || this.isCrashing) return;
     this.isCrashing = true;
     this.crashReason = reason;
-    this.crashTimer = 0.5; // Faster crash sequence
-    this.shakeTimer = 1.0;
+    this.crashTimer = CONFIG.crash.timerDuration;
+    this.shakeTimer = CONFIG.crash.shakeTimerInitial;
 
-    // Make ship black immediately
     this.ship.group.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
         obj.material = new THREE.MeshBasicMaterial({ color: 0x000000 });
@@ -448,14 +444,11 @@ export class GameEngine {
 
   public animate() {
     const rawDt = this.clock.getDelta();
-    // Clamp dt to avoid spiral of death on tab-switch or lag spikes
-    const clampedDt = Math.min(rawDt, 0.033); // Tighter clamp: max 30fps
+    const clampedDt = Math.min(rawDt, CONFIG.timing.dtClampMax);
 
-    // Smooth dt to prevent jitter from chunk generation spikes
-    this.smoothedDt = THREE.MathUtils.lerp(this.smoothedDt, clampedDt, 0.2);
+    this.smoothedDt = THREE.MathUtils.lerp(this.smoothedDt, clampedDt, CONFIG.timing.dtLerpFactor);
     const dt = this.smoothedDt;
 
-    // Scale factor: 1.0 at 60fps, 0.5 at 120fps, 2.0 at 30fps
     const dtScale = dt * 60;
 
     if (this.isGameOver) {
@@ -463,15 +456,13 @@ export class GameEngine {
       return;
     }
 
+    const crashCfg = CONFIG.crash;
     if (this.isCrashing) {
         this.crashTimer -= dt;
-        this.shakeTimer = Math.max(this.shakeTimer, 0.8);
+        this.shakeTimer = Math.max(this.shakeTimer, crashCfg.shakeMinimum);
 
-        // Fast camera roll
-        this.camera.rotation.z += 0.2 * dtScale;
-
-        // Ship falls slightly
-        this.ship.group.position.y -= 0.8 * dtScale;
+        this.camera.rotation.z += crashCfg.cameraRollSpeed * dtScale;
+        this.ship.group.position.y -= crashCfg.shipFallSpeed * dtScale;
 
         if (this.crashTimer <= 0) {
           this.isGameOver = true;
@@ -486,36 +477,39 @@ export class GameEngine {
 
     this.points += deltaDist * 0.1;
 
-    const alt = this.ship.group.position.y + 50;
+    const alt = this.ship.group.position.y - CONFIG.terrain.groupYOffset;
 
     // Proximity/Crash Detection
     const forward = new THREE.Vector3(0, 0, 10).applyQuaternion(this.ship.group.quaternion);
     const lookAheadPos = this.ship.group.position.clone().add(forward);
-    const terrainHeightAtShip = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) - 50;
-    const terrainHeightAhead = this.terrain.getHeight(lookAheadPos.x, lookAheadPos.z) - 50;
+    const terrainHeightAtShip = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) + CONFIG.terrain.groupYOffset;
+    const terrainHeightAhead = this.terrain.getHeight(lookAheadPos.x, lookAheadPos.z) + CONFIG.terrain.groupYOffset;
 
     let currentFuelDrain = this.fuelDrainRate;
     this.altWarning = "";
 
-    const isCloseToGround = this.ship.group.position.y < terrainHeightAtShip + 15;
-    const isApproachingObstacle = this.ship.group.position.y < terrainHeightAhead + 15;
+    const altCfg = CONFIG.altitude;
+    const isCloseToGround = this.ship.group.position.y < terrainHeightAtShip + altCfg.groundWarningOffset;
+    const isApproachingObstacle = this.ship.group.position.y < terrainHeightAhead + altCfg.groundWarningOffset;
 
     if (isCloseToGround || isApproachingObstacle) {
         this.altWarning = "PULL UP!";
-        // Increased persistent shake during warning
-        this.shakeTimer = Math.max(this.shakeTimer, 0.4);
-    } else if (alt >= 200) {
-        currentFuelDrain *= 10;
+        this.shakeTimer = Math.max(this.shakeTimer, CONFIG.motion.warningShakeTimer);
+    } else if (alt >= altCfg.criticalThreshold) {
+        currentFuelDrain *= CONFIG.fuel.criticalAltMultiplier;
         this.altGameOverTimer += dt;
-        this.altWarning = `PULL BACK IMMEDIATELY! ${Math.max(0, 3 - this.altGameOverTimer).toFixed(1)}s`;
-        if (this.altGameOverTimer >= 3) this.triggerDeath("LOST IN UPPER ATMOSPHERE");
-    } else if (alt >= 120) {
-        currentFuelDrain *= 4;
+        this.altWarning = `PULL BACK IMMEDIATELY! ${Math.max(0, altCfg.criticalTimeout - this.altGameOverTimer).toFixed(1)}s`;
+        if (this.altGameOverTimer >= altCfg.criticalTimeout) this.triggerDeath("LOST IN UPPER ATMOSPHERE");
+    } else if (alt >= altCfg.warningThreshold) {
+        currentFuelDrain *= CONFIG.fuel.highAltMultiplier;
         this.altWarning = "WARNING: HIGH ALTITUDE - PLASMA DRAIN INCREASED";
         this.altGameOverTimer = 0;
     } else {
         this.altGameOverTimer = 0;
     }
+
+    const { speed } = CONFIG;
+    const motionCfg = CONFIG.motion;
 
     if (!this.isCrashing) {
         this.fuel -= currentFuelDrain * dtScale;
@@ -523,47 +517,45 @@ export class GameEngine {
 
         this.ship.update(dtScale);
 
-        // Motion effects: screen shake and visual feedback based on acceleration/maneuvers
         const motionIntensity = this.ship.motionIntensity;
 
-        // Trigger shake only at high speed (above midpoint between cruise and max)
-        const shakeSpeedThreshold = (CONFIG.cruiseSpeed + CONFIG.maxSpeed) / 2;
-        if (motionIntensity > 0.4 && this.shakeTimer < 0.2 && this.ship.currentSpeed > shakeSpeedThreshold) {
+        const shakeSpeedThreshold = (speed.cruise + speed.max) / 2.75;
+        if (motionIntensity > motionCfg.shakeThreshold && this.shakeTimer < 0.2 && this.ship.currentSpeed > shakeSpeedThreshold) {
           this.shakeTimer = Math.max(this.shakeTimer, motionIntensity * 0.5);
         }
 
         // Update bloom intensity based on speed
-        const speedRatio = (this.ship.currentSpeed - CONFIG.minSpeed) / (CONFIG.maxSpeed - CONFIG.minSpeed);
-        this.bloomPass.strength = 0.8 + (speedRatio * 0.6); // 0.8 to 1.4
+        const bloomCfg = CONFIG.visuals.bloom;
+        const speedRatio = (this.ship.currentSpeed - speed.min) / (speed.max - speed.min);
+        this.bloomPass.strength = bloomCfg.baseStrength + (speedRatio * bloomCfg.speedBoost);
 
-        // Dynamic FOV - increases at high speed for sensation of speed
-        this.camera.fov = 75 + (speedRatio * 15); // 75° to 90°
-        this.camera.updateProjectionMatrix();
+        // Dynamic FOV
+        // const cameraCfg = CONFIG.camera;
+        // this.camera.fov = cameraCfg.fov + (speedRatio * (cameraCfg.maxFov - cameraCfg.fov));
+        // this.camera.updateProjectionMatrix();
 
-        // Update speed lines
         this.updateSpeedLines(motionIntensity);
     }
 
     const idealPos = CONFIG.cameraOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
     if (this.shakeTimer > 0) {
-      // Variable shake intensity based on timer value
-      const shakeStrength = this.shakeTimer * 10;
+      const shakeStrength = this.shakeTimer * motionCfg.shakeStrengthMultiplier;
       idealPos.x += (Math.random() - 0.5) * shakeStrength;
       idealPos.y += (Math.random() - 0.5) * shakeStrength;
       idealPos.z += (Math.random() - 0.5) * shakeStrength;
       this.shakeTimer -= dt;
     }
-    this.camera.position.lerp(idealPos, CONFIG.cameraLerp);
+    this.camera.position.lerp(idealPos, CONFIG.camera.lerp);
 
     // Prevent camera from going through the floor terrain
-    const terrainHeightAtCamera = this.terrain.getHeight(this.camera.position.x, this.camera.position.z) - 50;
-    if (this.camera.position.y < terrainHeightAtCamera + 2) {
-      this.camera.position.y = terrainHeightAtCamera + 2;
+    const terrainHeightAtCamera = this.terrain.getHeight(this.camera.position.x, this.camera.position.z) + CONFIG.terrain.groupYOffset;
+    if (this.camera.position.y < terrainHeightAtCamera + CONFIG.camera.terrainClearance) {
+      this.camera.position.y = terrainHeightAtCamera + CONFIG.camera.terrainClearance;
     }
 
     // Maintain camera 'up' relative to ship for free-roam
     const shipUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.ship.group.quaternion);
-    this.camera.up.lerp(shipUp, CONFIG.cameraLerp);
+    this.camera.up.lerp(shipUp, CONFIG.camera.lerp);
 
     this.camera.lookAt(CONFIG.cameraLookAtOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position));
 
@@ -575,11 +567,11 @@ export class GameEngine {
       dt
     );
     if (plasmaResult.fuel > 0) {
-      this.fuel = Math.min(CONFIG.maxFuel, this.fuel + plasmaResult.fuel);
+      this.fuel = Math.min(CONFIG.fuel.max, this.fuel + plasmaResult.fuel);
       this.points += plasmaResult.points;
       this.triggerFuelEffect(this.ship.group.position.clone());
       this.statusMessage = `+${Math.round(plasmaResult.fuel)} PLASMA`;
-      this.statusMessageTimer = 2.0;
+      this.statusMessageTimer = CONFIG.timing.statusMessageDuration;
     }
 
     // Decay status message
@@ -588,13 +580,12 @@ export class GameEngine {
       if (this.statusMessageTimer <= 0) this.statusMessage = "";
     }
 
-    // Ship glow effect when plasma charge received
     this.updateShipGlow();
 
     this.terrain.update(this.ship.group.position, this.scene, dist2D);
     this.checkCollisions();
     this.updateParticles();
-    
+
     // Space objects, stars, and speed lines follow camera to stay "infinite"
     this.stars.position.copy(this.camera.position);
     this.spaceObjects.position.copy(this.camera.position);
@@ -610,8 +601,10 @@ export class GameEngine {
     });
 
     this.onUpdateStats?.({
-      health: Math.round((this.health / this.maxHealth) * 100), fuel: this.fuel, points: Math.floor(this.points),
-      speed: Math.round(this.ship.currentSpeed * 3.6), // Convert to km/h
+      health: Math.round(Math.max(0, this.health)), maxHealth: this.maxHealth,
+      fuel: Math.round(Math.max(0, Math.min(this.fuel, CONFIG.fuel.max))), maxFuel: CONFIG.fuel.max,
+      points: Math.floor(this.points),
+      speed: Math.round(this.ship.currentSpeed * 3.6),
       alt: Math.round(alt),
       dist: Math.round(distTotal),
       warning: this.altWarning,

@@ -1,49 +1,58 @@
+// ─── PlasmaRecharger ─────────────────────────────────────────────────────────
+//
+// The plasma recharger system is the game's fuel replenishment mechanic.
+//
+// How it works:
+//   1. The PlasmaRechargerManager spawns recharger stations ahead of the ship.
+//   2. Each station is a ground pad with a glowing beam cone shooting upward.
+//   3. The player flies through the beam to collect fuel. Fuel amount scales
+//      with proximity — flying low and centered gives the most plasma.
+//   4. After collection (or after a timeout), the station deactivates.
+//   5. The manager ensures there's always one active recharger in the world
+//      and spawns the next one when the current one is used or expires.
+//
+// Difficulty ramp:
+//   Early rechargers spawn directly ahead. As the player collects more,
+//   they spawn at increasing angles off the flight path (up to ±60°),
+//   forcing the player to hunt for them. This plateaus after 20 collections.
+//
+// Spawning distance:
+//   Scales with current fuel level — when fuel is low, the next recharger
+//   spawns closer (150 units). When fuel is full, it spawns further (400 units).
+// ─────────────────────────────────────────────────────────────────────────────
+
 import * as THREE from 'three';
 import { CONFIG } from './constants';
 
-// ─── Config ──────────────────────────────────────────────────────────────────
+// ─── Module state ────────────────────────────────────────────────────────────
 
-/** Beam color — matches thruster glow (sky blue plasma) */
+const PR = CONFIG.plasmaRecharger;
+
+/** Shared beam/glow color — sky-blue plasma matching the ship's engine exhaust. */
 const BEAM_COLOR = 0x66ccff;
 
-/** Cylinder base dimensions */
-const BASE_RADIUS = 3.5;
-const BASE_HEIGHT = 1.2;
-
-/** Beam cone — point at base, spreads upward */
-const BEAM_CONE_SPREAD = 8.0; // radius at the top of the cone
-
-/** How high the beam reaches above the recharger (tweak this) */
-export const PLASMA_BEAM_RANGE = 80;
-
-/** Max fuel replenish at point-blank flyover */
-const MAX_FUEL_REPLENISH = 90;
-
-/** Horizontal collection radius — how close (xz) you need to fly over */
-const COLLECTION_RADIUS = 15;
-
-/** Ship glow duration in seconds after collecting plasma */
-const SHIP_GLOW_DURATION = 1.2;
-
-/** Seconds before an uncollected recharger auto-expires */
-const RECHARGER_LIFETIME = 30;
-
-/** How many rechargers have been collected — drives difficulty ramp */
+/** Tracks total collections across all rechargers. Drives the difficulty ramp. */
 let globalCollectCount = 0;
 
-/** Max angle offset (radians) for placement difficulty ramp */
-const MAX_ANGLE_OFFSET = Math.PI / 3; // 60 degrees at hardest
-
-/** Number of collections before difficulty plateaus */
-const DIFFICULTY_RAMP_COUNT = 20;
-
-// ─── PlasmaRecharger (single unit) ──────────────────────────────────────────
+// ─── PlasmaRecharger (single station) ────────────────────────────────────────
+//
+// One ground pad + beam cone + point light. Handles its own lifetime,
+// collection detection, and cleanup.
 
 export class PlasmaRecharger {
+  /** Root group containing all meshes — add this to the scene. */
   public group: THREE.Group;
+
+  /** Whether this recharger has been collected by the player. */
   public used = false;
+
+  /** Whether this recharger timed out without being collected. */
   public expired = false;
+
+  /** World-space position of the ground pad (set once on construction). */
   public worldPos = new THREE.Vector3();
+
+  /** Seconds since this recharger was spawned (drives shimmer animation + lifetime). */
   public age = 0;
 
   private beamMesh: THREE.Mesh;
@@ -52,72 +61,200 @@ export class PlasmaRecharger {
   private beamLight: THREE.PointLight;
   private beamRange: number;
 
-  constructor(x: number, groundY: number, z: number, beamRange = PLASMA_BEAM_RANGE) {
+  constructor(x: number, groundY: number, z: number, beamRange = PR.beamRange) {
     this.beamRange = beamRange;
     this.group = new THREE.Group();
 
-    // Flat metallic cylinder — base pad
-    const baseGeo = new THREE.CylinderGeometry(BASE_RADIUS, BASE_RADIUS, BASE_HEIGHT, 24);
-    const baseMat = new THREE.MeshStandardMaterial({
+    this.baseMesh = this.buildBasePad();
+    this.group.add(this.baseMesh);
+    this.group.add(this.buildGlowRing());
+
+    this.beamMaterial = this.buildBeamMaterial();
+    this.beamMesh = this.buildBeamCone(this.beamMaterial);
+    this.group.add(this.beamMesh);
+
+    this.beamLight = this.buildBeamLight();
+    this.group.add(this.beamLight);
+
+    this.group.position.set(x, groundY, z);
+    this.worldPos.set(x, groundY, z);
+  }
+
+  // ── Per-frame update ───────────────────────────────────────────────────────
+
+  /**
+   * Advance the recharger's lifetime and animate the beam shimmer.
+   * @returns true if the recharger just expired this frame.
+   */
+  public tick(dt: number): boolean {
+    if (this.used || this.expired) return false;
+
+    this.age += dt;
+    this.beamMaterial.uniforms.uTime.value = this.age;
+
+    if (this.age >= PR.lifetime) {
+      this.deactivate();
+      this.expired = true;
+      return true;
+    }
+    return false;
+  }
+
+  // ── Collection ─────────────────────────────────────────────────────────────
+
+  /**
+   * Check if the ship is within the beam and return the fuel amount collected.
+   *
+   * Fuel scales with proximity on two axes:
+   *   - Vertical: 100% at ground level → 20% at beam top
+   *   - Horizontal: 100% at beam center → 50% at collection edge
+   *
+   * @returns Fuel amount (0 if out of range or already used)
+   */
+  public tryCollect(shipPos: THREE.Vector3): number {
+    if (this.used || this.expired) return 0;
+
+    // Horizontal distance check (XZ plane)
+    const dx = shipPos.x - this.worldPos.x;
+    const dz = shipPos.z - this.worldPos.z;
+    const horizDist = Math.sqrt(dx * dx + dz * dz);
+    if (horizDist > PR.collectionRadius) return 0;
+
+    // Vertical range check — must be above the pad and below beam top
+    const shipAlt = shipPos.y - this.worldPos.y;
+    if (shipAlt < 0 || shipAlt > this.beamRange) return 0;
+
+    // Fuel scales inversely with distance on both axes
+    const verticalFactor = 1.0 - (shipAlt / this.beamRange) * 0.8;
+    const horizFactor = 1.0 - (horizDist / PR.collectionRadius) * 0.5;
+    const fuel = PR.maxFuelReplenish * verticalFactor * horizFactor;
+
+    this.deactivate();
+    globalCollectCount++;
+    return fuel;
+  }
+
+  // ── Cleanup ────────────────────────────────────────────────────────────────
+
+  /** Remove all meshes from the scene and dispose GPU resources. */
+  public dispose(scene: THREE.Scene) {
+    scene.remove(this.group);
+    this.group.traverse(child => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        mats.forEach(m => m.dispose());
+      }
+    });
+  }
+
+  // ── Internal helpers ───────────────────────────────────────────────────────
+
+  /** Turn off the beam visuals and dim the base pad. */
+  private deactivate() {
+    this.used = true;
+    this.beamMesh.visible = false;
+    this.beamLight.visible = false;
+    (this.baseMesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
+  }
+
+  // ── Mesh builders ──────────────────────────────────────────────────────────
+  // Each returns a positioned mesh ready to add to this.group.
+
+  /** Flat metallic cylinder sitting on the ground — the recharger's landing pad. */
+  private buildBasePad(): THREE.Mesh {
+    const geo = new THREE.CylinderGeometry(PR.baseRadius, PR.baseRadius, PR.baseHeight, 24);
+    const mat = new THREE.MeshStandardMaterial({
       color: 0x888899,
       metalness: 0.9,
       roughness: 0.2,
       emissive: BEAM_COLOR,
       emissiveIntensity: 0.3,
     });
-    this.baseMesh = new THREE.Mesh(baseGeo, baseMat);
-    this.baseMesh.position.y = BASE_HEIGHT / 2;
-    this.group.add(this.baseMesh);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = PR.baseHeight / 2;
+    return mesh;
+  }
 
-    // Inner glow ring on top of the pad
-    const ringGeo = new THREE.TorusGeometry(BASE_RADIUS * 0.6, 0.15, 8, 24);
-    const ringMat = new THREE.MeshBasicMaterial({
+  /** Glowing torus ring sitting on top of the base pad. */
+  private buildGlowRing(): THREE.Mesh {
+    const geo = new THREE.TorusGeometry(PR.baseRadius * 0.6, 0.15, 8, 24);
+    const mat = new THREE.MeshBasicMaterial({
       color: BEAM_COLOR,
       transparent: true,
       opacity: 0.6,
     });
-    const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = BASE_HEIGHT + 0.05;
-    this.group.add(ring);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = PR.baseHeight + 0.05;
+    return mesh;
+  }
 
-    // Cone beam — point at base, spreads wide at the top (like a searchlight)
-    // CylinderGeometry(radiusTop, radiusBottom, height) — top is the sky end
-    const beamGeo = new THREE.CylinderGeometry(
-      BEAM_CONE_SPREAD, 0.15, this.beamRange, 24, 16, true
+  /**
+   * Truncated cone (frustum) that forms the visible beam.
+   * Uses a custom ShaderMaterial for animated shimmer + vertical fade.
+   */
+  private buildBeamCone(material: THREE.ShaderMaterial): THREE.Mesh {
+    const geo = new THREE.CylinderGeometry(
+      PR.beamConeSpread,  // wide end (top)
+      PR.beamBaseRadius,  // base end (bottom) — wider than a point for a searchlight look
+      this.beamRange,
+      24, 16, true,       // open-ended cylinder
     );
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.position.y = PR.baseHeight + this.beamRange / 2;
+    return mesh;
+  }
 
-    // Shader material with animated shimmer
-    const beamColor = new THREE.Color(BEAM_COLOR);
-    this.beamMaterial = new THREE.ShaderMaterial({
+  /** Point light near the top of the beam — casts atmospheric glow on nearby terrain. */
+  private buildBeamLight(): THREE.PointLight {
+    const light = new THREE.PointLight(BEAM_COLOR, 4, this.beamRange * 2);
+    light.position.y = PR.baseHeight + this.beamRange * 0.7;
+    return light;
+  }
+
+  /**
+   * Custom shader for the beam cone.
+   *
+   * Vertex shader:
+   *   - Passes UV coords and a normalized height (0 = base, 1 = top) to the fragment.
+   *
+   * Fragment shader:
+   *   - baseFade: beam is bright at the base and fades toward the top.
+   *   - shimmer: two layers of scrolling hash-noise create a plasma swirl effect.
+   *   - pulse: slow sine wave adds a breathing glow.
+   *   - Final alpha = baseFade × shimmer × pulse, kept subtle (× 0.35).
+   */
+  private buildBeamMaterial(): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
-        uColor: { value: beamColor },
+        uColor: { value: new THREE.Color(BEAM_COLOR) },
       },
-      vertexShader: `
+      vertexShader: /* glsl */ `
         varying vec2 vUv;
         varying float vHeight;
         void main() {
           vUv = uv;
-          // height = 0 at bottom (point), 1 at top (wide)
+          // Normalized height: 0 at bottom, 1 at top
           vHeight = position.y / ${this.beamRange.toFixed(1)} + 0.5;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
-      fragmentShader: `
+      fragmentShader: /* glsl */ `
         uniform float uTime;
         uniform vec3 uColor;
         varying vec2 vUv;
         varying float vHeight;
 
-        // Simple hash-based noise
+        // Fast hash-based noise for shimmer effect
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
         }
         float noise(vec2 p) {
           vec2 i = floor(p);
           vec2 f = fract(p);
-          f = f * f * (3.0 - 2.0 * f);
+          f = f * f * (3.0 - 2.0 * f); // smoothstep
           return mix(
             mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
@@ -126,15 +263,15 @@ export class PlasmaRecharger {
         }
 
         void main() {
-          // Fade: strong at base, fading toward top
+          // Fade out toward the top of the beam
           float baseFade = 1.0 - vHeight * 0.85;
 
-          // Scrolling shimmer — noise moves upward over time
+          // Two layers of scrolling noise — simulates rising plasma
           float n1 = noise(vec2(vUv.x * 6.0, vUv.y * 4.0 - uTime * 1.5));
           float n2 = noise(vec2(vUv.x * 12.0, vUv.y * 8.0 - uTime * 2.5));
           float shimmer = 0.5 + 0.3 * n1 + 0.2 * n2;
 
-          // Pulsing glow
+          // Slow breathing pulse
           float pulse = 0.9 + 0.1 * sin(uTime * 3.0);
 
           float alpha = baseFade * shimmer * pulse * 0.35;
@@ -146,90 +283,16 @@ export class PlasmaRecharger {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-
-    this.beamMesh = new THREE.Mesh(beamGeo, this.beamMaterial);
-    this.beamMesh.position.y = BASE_HEIGHT + this.beamRange / 2;
-    this.group.add(this.beamMesh);
-
-    // Point light at the top of the beam for atmospheric glow
-    this.beamLight = new THREE.PointLight(BEAM_COLOR, 4, this.beamRange * 2);
-    this.beamLight.position.y = BASE_HEIGHT + this.beamRange * 0.7;
-    this.group.add(this.beamLight);
-
-    // Position the whole group on the ground
-    this.group.position.set(x, groundY, z);
-    this.worldPos.set(x, groundY, z);
-  }
-
-  /**
-   * Check if the ship is within range and return fuel amount (0 if out of range or used).
-   * Fuel scales inversely with vertical distance — closer = more fuel.
-   */
-  /** Advance lifetime and animate beam. Returns true if just expired this frame. */
-  tick(dt: number): boolean {
-    if (this.used || this.expired) return false;
-    this.age += dt;
-
-    // Animate shimmer
-    this.beamMaterial.uniforms.uTime.value = this.age;
-
-    if (this.age >= RECHARGER_LIFETIME) {
-      this.expire();
-      return true;
-    }
-    return false;
-  }
-
-  private expire() {
-    this.expired = true;
-    this.deactivate();
-  }
-
-  tryCollect(shipPos: THREE.Vector3): number {
-    if (this.used || this.expired) return 0;
-
-    const dx = shipPos.x - this.worldPos.x;
-    const dz = shipPos.z - this.worldPos.z;
-    const horizDist = Math.sqrt(dx * dx + dz * dz);
-
-    if (horizDist > COLLECTION_RADIUS) return 0;
-
-    const shipAlt = shipPos.y - this.worldPos.y;
-    if (shipAlt < 0 || shipAlt > this.beamRange) return 0;
-
-    // Proximity factor: 1.0 at ground level, 0.2 at beam top
-    const verticalFactor = 1.0 - (shipAlt / this.beamRange) * 0.8;
-    // Horizontal factor: 1.0 at center, 0.5 at edge
-    const horizFactor = 1.0 - (horizDist / COLLECTION_RADIUS) * 0.5;
-
-    const fuel = MAX_FUEL_REPLENISH * verticalFactor * horizFactor;
-
-    this.deactivate();
-    globalCollectCount++;
-    return fuel;
-  }
-
-  private deactivate() {
-    this.used = true;
-    this.beamMesh.visible = false;
-    this.beamLight.visible = false;
-    // Dim the base
-    (this.baseMesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
-  }
-
-  dispose(scene: THREE.Scene) {
-    scene.remove(this.group);
-    this.group.traverse(child => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-        else child.material.dispose();
-      }
-    });
   }
 }
 
-// ─── PlasmaRechargerManager ────────────────────────────────────────────────
+// ─── PlasmaRechargerManager ──────────────────────────────────────────────────
+//
+// Owns the lifecycle of all PlasmaRecharger instances:
+//   - Ensures exactly one active recharger exists at all times
+//   - Spawns the next recharger when the current one is collected or expires
+//   - Cleans up distant used/expired rechargers to free GPU memory
+//   - Exposes shipGlowTimer so GameEngine can pulse the ship hull on collection
 
 export class PlasmaRechargerManager {
   private scene: THREE.Scene;
@@ -237,114 +300,68 @@ export class PlasmaRechargerManager {
   private getTerrainHeight: (x: number, z: number) => number;
   private firstSpawn = true;
 
-  /** Ship glow state — exposed so GameEngine can read it */
+  /**
+   * Countdown timer for the ship hull glow effect after collecting plasma.
+   * GameEngine reads this each frame to set emissive intensity on ship meshes.
+   */
   public shipGlowTimer = 0;
-
-  /** Points awarded per collection */
-  private static readonly COLLECT_POINTS = 500;
 
   constructor(scene: THREE.Scene, getTerrainHeight: (x: number, z: number) => number) {
     this.scene = scene;
     this.getTerrainHeight = getTerrainHeight;
   }
 
-  /**
-   * Spawn the next recharger based on ship position, heading, and fuel level.
-   * Called by GameEngine when there are no active (unused) rechargers.
-   */
-  spawnNext(shipPos: THREE.Vector3, shipQuaternion: THREE.Quaternion, fuelPercent: number) {
-    // ── Distance: closer when fuel is low ──
-    // Ship moves ~60 units/sec at cruise. These distances = 0.5s to 3s ahead.
-    let spawnDist: number;
-    if (this.firstSpawn) {
-      // First recharger spawns very close so the player sees it immediately
-      spawnDist = 500;
-      this.firstSpawn = false;
-    } else {
-      const minDist = 150;
-      const maxDist = 400;
-      const fuelT = Math.max(0, Math.min(1, fuelPercent / 100));
-      spawnDist = minDist + (maxDist - minDist) * fuelT;
-    }
-
-    // ── Angle offset: increases with difficulty ──
-    const difficultyT = Math.min(globalCollectCount / DIFFICULTY_RAMP_COUNT, 1);
-    const maxOffset = MAX_ANGLE_OFFSET * difficultyT;
-    const angleOffset = (Math.random() - 0.5) * 2 * maxOffset;
-
-    // Ship forward direction projected onto XZ plane
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(shipQuaternion);
-    forward.y = 0;
-    forward.normalize();
-
-    // Rotate forward by angleOffset around Y axis
-    const rotAxis = new THREE.Vector3(0, 1, 0);
-    forward.applyAxisAngle(rotAxis, angleOffset);
-
-    const spawnX = shipPos.x + forward.x * spawnDist;
-    const spawnZ = shipPos.z + forward.z * spawnDist;
-    const groundY = this.getTerrainHeight(spawnX, spawnZ) - 50; // terrain offset
-
-    const recharger = new PlasmaRecharger(spawnX, groundY, spawnZ);
-    this.rechargers.push(recharger);
-    this.scene.add(recharger.group);
-  }
+  // ── Per-frame update ───────────────────────────────────────────────────────
 
   /**
-   * Returns true if there's an active (unused) recharger in the world.
+   * Main update loop — called once per frame by GameEngine.
+   *
+   * Steps:
+   *   1. Tick all rechargers (advance lifetime, animate)
+   *   2. Check each recharger for collection against the ship position
+   *   3. Decay the ship glow timer
+   *   4. Spawn a new recharger if none are active
+   *   5. Clean up old rechargers that are far behind the player
+   *
+   * @returns Total fuel collected and points earned this frame
    */
-  hasActiveRecharger(): boolean {
-    return this.rechargers.some(r => !r.used && !r.expired);
-  }
-
-  /**
-   * Check all rechargers against ship position.
-   * Returns fuel collected and points earned.
-   */
-  update(shipPos: THREE.Vector3, shipQuaternion: THREE.Quaternion, fuelPercent: number, dt: number): { fuel: number; points: number } {
+  public update(
+    shipPos: THREE.Vector3,
+    shipQuaternion: THREE.Quaternion,
+    fuelPercent: number,
+    dt: number,
+  ): { fuel: number; points: number } {
     let totalFuel = 0;
     let totalPoints = 0;
 
+    // Tick and check collection for all rechargers
     for (const recharger of this.rechargers) {
       recharger.tick(dt);
       const fuel = recharger.tryCollect(shipPos);
       if (fuel > 0) {
         totalFuel += fuel;
-        totalPoints += PlasmaRechargerManager.COLLECT_POINTS;
-        this.shipGlowTimer = SHIP_GLOW_DURATION;
+        totalPoints += PR.collectPoints;
+        this.shipGlowTimer = PR.shipGlowDuration;
       }
     }
 
-    // Decay ship glow
+    // Decay the hull glow
     if (this.shipGlowTimer > 0) {
       this.shipGlowTimer -= dt;
     }
 
-    // Spawn next if none active
+    // Always keep one active recharger in the world
     if (!this.hasActiveRecharger()) {
       this.spawnNext(shipPos, shipQuaternion, fuelPercent);
     }
 
-    // Cleanup old used rechargers that are far away
-    this.cleanup(shipPos);
+    this.cleanupDistant(shipPos);
 
     return { fuel: totalFuel, points: totalPoints };
   }
 
-  private cleanup(shipPos: THREE.Vector3) {
-    const maxDist = CONFIG.chunkSize * CONFIG.renderDist * 2;
-    this.rechargers = this.rechargers.filter(r => {
-      const dist = shipPos.distanceTo(r.worldPos);
-      if ((r.used || r.expired) && dist > maxDist) {
-        r.dispose(this.scene);
-        return false;
-      }
-      return true;
-    });
-  }
-
-  /** Reset state for new game */
-  reset() {
+  /** Reset all state for a new game session. */
+  public reset() {
     for (const r of this.rechargers) {
       r.dispose(this.scene);
     }
@@ -352,5 +369,71 @@ export class PlasmaRechargerManager {
     this.shipGlowTimer = 0;
     this.firstSpawn = true;
     globalCollectCount = 0;
+  }
+
+  // ── Spawning ───────────────────────────────────────────────────────────────
+
+  /**
+   * Spawn the next recharger ahead of the ship.
+   *
+   * Placement logic:
+   *   - Distance scales with fuel: low fuel → closer spawn, full fuel → further
+   *   - Angle offset increases with difficulty (globalCollectCount):
+   *     early game = directly ahead, late game = up to ±60° off the flight path
+   *   - The first spawn is always at a fixed distance so the player sees it immediately
+   */
+  private spawnNext(shipPos: THREE.Vector3, shipQuaternion: THREE.Quaternion, fuelPercent: number) {
+    const spawnDist = this.calculateSpawnDistance(fuelPercent);
+    const angleOffset = this.calculateAngleOffset();
+
+    // Project the ship's forward direction onto the XZ plane and rotate by the offset
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(shipQuaternion);
+    forward.y = 0;
+    forward.normalize();
+    forward.applyAxisAngle(new THREE.Vector3(0, 1, 0), angleOffset);
+
+    const spawnX = shipPos.x + forward.x * spawnDist;
+    const spawnZ = shipPos.z + forward.z * spawnDist;
+    const groundY = this.getTerrainHeight(spawnX, spawnZ) + CONFIG.terrain.groupYOffset;
+
+    const recharger = new PlasmaRecharger(spawnX, groundY, spawnZ);
+    this.rechargers.push(recharger);
+    this.scene.add(recharger.group);
+  }
+
+  /** How far ahead to place the next recharger (closer when fuel is low). */
+  private calculateSpawnDistance(fuelPercent: number): number {
+    if (this.firstSpawn) {
+      this.firstSpawn = false;
+      return PR.spawning.firstDistance;
+    }
+    const fuelT = THREE.MathUtils.clamp(fuelPercent / 100, 0, 1);
+    return PR.spawning.minDistance + (PR.spawning.maxDistance - PR.spawning.minDistance) * fuelT;
+  }
+
+  /** Random angle offset based on difficulty progression. */
+  private calculateAngleOffset(): number {
+    const difficultyT = Math.min(globalCollectCount / PR.difficultyRampCount, 1);
+    const maxOffset = PR.maxAngleOffset * difficultyT;
+    return (Math.random() - 0.5) * 2 * maxOffset;
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /** True if at least one recharger in the world hasn't been used or expired. */
+  private hasActiveRecharger(): boolean {
+    return this.rechargers.some(r => !r.used && !r.expired);
+  }
+
+  /** Remove used/expired rechargers that are far behind the player. */
+  private cleanupDistant(shipPos: THREE.Vector3) {
+    const maxDist = CONFIG.terrain.chunkSize * CONFIG.terrain.renderDist * 2;
+    this.rechargers = this.rechargers.filter(r => {
+      if ((r.used || r.expired) && shipPos.distanceTo(r.worldPos) > maxDist) {
+        r.dispose(this.scene);
+        return false;
+      }
+      return true;
+    });
   }
 }

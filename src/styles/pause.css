@@ -1,0 +1,80 @@
+/* ─── Pause Overlay ─────────────────────────────────────────────────────────── */
+
+#pause-overlay {
+  background-color: rgba(0, 5, 10, 0.92);
+  backdrop-filter: blur(6px);
+  z-index: 200;
+}
+
+#pause-overlay h1 {
+  color: var(--color-text-accent);
+  margin-bottom: 8px;
+}
+
+#pause-overlay .pause-subtitle {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin-top: 0;
+  margin-bottom: 30px;
+}
+
+/* ─── Two-column layout ─────────────────────────────────────────────────────── */
+
+#pause-help-layout {
+  display: flex;
+  gap: 40px;
+  max-width: 800px;
+  width: 100%;
+  padding: 0 20px;
+  box-sizing: border-box;
+}
+
+#pause-controls-section,
+#pause-tips-section {
+  flex: 1;
+}
+
+.pause-section-title {
+  color: var(--color-text-accent);
+  font-size: var(--text-base);
+  margin-bottom: 16px;
+  border-bottom: 1px solid rgba(0, 255, 255, 0.2);
+  padding-bottom: 8px;
+}
+
+/* ─── Controls table ────────────────────────────────────────────────────────── */
+
+.controls-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.controls-table td:first-child {
+  padding: 6px 12px 6px 0;
+  color: var(--color-text-accent);
+  font-weight: 700;
+  white-space: nowrap;
+  width: 80px;
+}
+
+.controls-table td:last-child {
+  padding: 6px 0;
+  color: var(--color-text-secondary);
+}
+
+/* ─── Tips ──────────────────────────────────────────────────────────────────── */
+
+#pause-tips-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.tip-label--plasma  { color: var(--color-plasma);      font-weight: 700; }
+.tip-label--danger  { color: var(--color-danger-soft);  font-weight: 700; }
+.tip-label--speed   { color: var(--color-warning);      font-weight: 700; }
+.tip-label--banking { color: var(--color-success);      font-weight: 700; }

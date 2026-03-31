@@ -22,6 +22,7 @@ export const PersistenceService = {
 
   saveUser: (user: UserData) => {
     const users = PersistenceService.getUsers();
+    user.totalPoints = Math.floor(user.totalPoints);
     users[user.username] = user;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
   },

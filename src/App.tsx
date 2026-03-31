@@ -1,44 +1,41 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GameEngine, GameStats } from './engine/GameEngine';
 import { PersistenceService, UserData, Upgrades } from './engine/PersistenceService';
 import { ShipPreview } from './components/ShipPreview';
 import { MusicManager } from './engine/MusicManager';
+import { CONFIG } from './engine/constants';
 
-// 5 palettes based on color theory — each pair is designed to complement each other
 const PALETTE_OPTIONS = [
-  { name: 'Solar Flare',     skinColor: '#F5E6C8', accentColor: '#E8721A' }, // burnt orange + cream (warm analogous)
-  { name: 'Deep Void',       skinColor: '#1A2680', accentColor: '#FFD700' }, // navy + gold (complementary)
-  { name: 'Crimson Strike',  skinColor: '#CC1515', accentColor: '#C8C8C8' }, // crimson + silver (neutral pair)
-  { name: 'Nebula Ghost',    skinColor: '#4A0E6E', accentColor: '#00E5FF' }, // deep purple + cyan (complementary)
-  { name: 'Arctic Phantom',  skinColor: '#0D4F6E', accentColor: '#E0F7FA' }, // dark teal + ice white (cool analogous)
+  { name: 'Ghost',     skinColor: '#D8DEE9', accentColor: '#4A9EE5' }, // cool white hull + electric blue accents — clean space agency look
+  { name: 'Stealth',   skinColor: '#2C2F33', accentColor: '#E87420' }, // matte charcoal + signal orange — tactical military
+  { name: 'Titanium',  skinColor: '#8A8D93', accentColor: '#D92B2B' }, // gunmetal silver + racing red — speed demon
+  { name: 'Midnight',  skinColor: '#1B2338', accentColor: '#C9A24C' }, // deep navy + warm gold — luxury flagship
+  { name: 'Phantom',   skinColor: '#1A1A1E', accentColor: '#5BA4CF' }, // near-black + steel blue — covert ops
 ];
 
-
-
-const UPGRADE_COSTS = [0, 5000, 15000, 30000, 60000, 100000];
+const UPGRADE_COSTS = CONFIG.upgrades.costs;
 
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const musicRef = useRef<MusicManager | null>(null);
-  
+
   const [user, setUser] = useState<UserData | null>(PersistenceService.getCurrentUser());
   const [usernameInput, setUsernameInput] = useState('');
   const [gameState, setGameState] = useState<'menu' | 'shop' | 'playing' | 'gameOver'>('menu');
-  
-  const [stats, setStats] = useState<GameStats>({ 
-    health: 100, 
-    fuel: 100, 
-    points: 0, 
-    speed: 0, 
-    alt: 0, 
-    dist: 0, 
-    warning: '',
-    isCrashing: false,
-    statusMessage: ''
+
+  const [stats, setStats] = useState<GameStats>({
+    health: 100, maxHealth: 100, fuel: 100, maxFuel: 100,
+    points: 0, speed: 0, alt: 0, dist: 0,
+    warning: '', isCrashing: false, statusMessage: ''
   });
   const [discovery, setDiscovery] = useState<{ name: string; visible: boolean }>({ name: '', visible: false });
   const [gameOverReason, setGameOverReason] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
+  const isPausedRef = useRef(false);
+  const [resourceAlert, setResourceAlert] = useState('');
+  const lastFuelTier = useRef(4);
+  const lastHealthTier = useRef(4);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,8 +51,31 @@ const App: React.FC = () => {
     setGameState('menu');
   };
 
+  const togglePause = useCallback(() => {
+    setIsPaused(prev => {
+      isPausedRef.current = !prev;
+      return !prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && gameState === 'playing') {
+        e.preventDefault();
+        togglePause();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [gameState, togglePause]);
+
   const startGame = () => {
     if (!user) return;
+    setIsPaused(false);
+    isPausedRef.current = false;
+    lastFuelTier.current = 0;
+    lastHealthTier.current = 0;
+    setResourceAlert('');
     setGameState('playing');
   };
 
@@ -63,16 +83,12 @@ const App: React.FC = () => {
     if (!user) return;
     const currentLevel = user.upgrades[type] as number;
     if (currentLevel >= 5) return;
-    
     const cost = UPGRADE_COSTS[currentLevel + 1];
     if (user.totalPoints >= cost) {
       const updatedUser = {
         ...user,
         totalPoints: user.totalPoints - cost,
-        upgrades: {
-          ...user.upgrades,
-          [type]: currentLevel + 1
-        }
+        upgrades: { ...user.upgrades, [type]: currentLevel + 1 }
       };
       setUser(updatedUser);
       PersistenceService.saveUser(updatedUser);
@@ -83,11 +99,7 @@ const App: React.FC = () => {
     if (!user) return;
     const updatedUser = {
       ...user,
-      upgrades: {
-        ...user.upgrades,
-        skin: skinColor,
-        accentColor
-      }
+      upgrades: { ...user.upgrades, skin: skinColor, accentColor }
     };
     setUser(updatedUser);
     PersistenceService.saveUser(updatedUser);
@@ -110,19 +122,35 @@ const App: React.FC = () => {
 
     engine.onUpdateStats = (newStats) => {
       setStats(newStats);
+
+      // Fuel threshold alerts (compare as percentage)
+      const fuelPct = (newStats.fuel / newStats.maxFuel) * 100;
+      const fuelThresholds = [75, 50, 25, 10];
+      const fuelTier = fuelThresholds.filter(t => fuelPct <= t).length;
+      if (fuelTier > lastFuelTier.current) {
+        const crossedAt = fuelThresholds[fuelTier - 1];
+        setResourceAlert(`PLASMA AT ${crossedAt}%`);
+        setTimeout(() => setResourceAlert(''), 2500);
+      }
+      lastFuelTier.current = fuelTier;
+
+      // Health threshold alerts (compare as percentage)
+      const healthPct = (newStats.health / newStats.maxHealth) * 100;
+      const healthThresholds = [75, 50, 25, 10];
+      const healthTier = healthThresholds.filter(t => healthPct <= t).length;
+      if (healthTier > lastHealthTier.current) {
+        const crossedAt = healthThresholds[healthTier - 1];
+        setResourceAlert(`HULL AT ${crossedAt}%`);
+        setTimeout(() => setResourceAlert(''), 2500);
+      }
+      lastHealthTier.current = healthTier;
     };
 
     engine.onGameOver = (reason) => {
       setGameOverReason(reason);
       setGameState('gameOver');
-      
-      // Save points
       if (user) {
-        const finalPoints = engine.points; 
-        const updatedUser = {
-          ...user,
-          totalPoints: user.totalPoints + finalPoints
-        };
+        const updatedUser = { ...user, totalPoints: user.totalPoints + Math.floor(engine.points) };
         setUser(updatedUser);
         PersistenceService.saveUser(updatedUser);
       }
@@ -130,7 +158,7 @@ const App: React.FC = () => {
 
     let animationId: number;
     const animate = () => {
-      engine.animate();
+      if (!isPausedRef.current) engine.animate();
       animationId = requestAnimationFrame(animate);
     };
     animate();
@@ -139,298 +167,251 @@ const App: React.FC = () => {
       cancelAnimationFrame(animationId);
       musicRef.current?.stop();
       musicRef.current = null;
-      if (containerRef.current) {
-        containerRef.current.innerHTML = '';
-      }
+      if (containerRef.current) containerRef.current.innerHTML = '';
     };
   }, [gameState]);
 
+  // ── Login ────────────────────────────────────────────────────────────────
+
   if (!user) {
     return (
-      <div style={{
-        width: '100vw', height: '100vh', backgroundColor: '#050505',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        color: '#0ff', fontFamily: 'monospace'
-      }}>
-        <h1 style={{ fontSize: '3em', textShadow: '0 0 20px #0ff', marginBottom: '40px' }}>NEO-FLIGHT SIM</h1>
-        <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '20px', width: '300px' }}>
-          <input 
-            type="text" 
+      <div id="login-screen">
+        <h1 id="login-title" data-text="VOID RUNNER">VOID RUNNER</h1>
+        <form id="login-form" onSubmit={handleLogin}>
+          <input
+            type="text"
             placeholder="PILOT USERNAME"
             value={usernameInput}
             onChange={(e) => setUsernameInput(e.target.value)}
-            style={{
-              padding: '15px', background: '#001111', border: '2px solid #0ff',
-              color: '#0ff', fontSize: '1.2em', outline: 'none', textAlign: 'center'
-            }}
           />
-          <button type="submit" style={{
-            padding: '15px', background: '#0ff', color: '#000', border: 'none',
-            fontWeight: 'bold', fontSize: '1.2em', cursor: 'pointer', boxShadow: '0 0 15px #0ff'
-          }}>
-            INITIALIZE SESSION
-          </button>
+          <button type="submit" className="btn">INITIALIZE SESSION</button>
         </form>
       </div>
     );
   }
 
+  // ── Main app ─────────────────────────────────────────────────────────────
+
+  const statusText = stats.statusMessage || resourceAlert || (discovery.visible ? `ENTERING ${discovery.name}` : '');
+  const statusClass = stats.statusMessage ? 'status--plasma' : resourceAlert ? 'status--warning' : 'status--biome';
+
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden', backgroundColor: '#000', fontFamily: 'monospace' }}>
-      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-      
+    <div id="app-root">
+      <div id="game-canvas-container" ref={containerRef} />
+
+      {/* ── Menu ──────────────────────────────────────────────────────── */}
       {gameState === 'menu' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-          backgroundColor: 'rgba(0, 0, 0, 0.8)', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', color: '#fff', zIndex: 100
-        }}>
-          <h1 style={{ fontSize: '4em', textShadow: '0 0 20px #0ff' }}>WELCOME, {user.username}</h1>
-          <p style={{ fontSize: '1.5em', color: '#0ff' }}>TOTAL CREDITS: {user.totalPoints.toLocaleString()}</p>
-          
-          <div style={{ display: 'flex', gap: '20px', marginTop: '40px' }}>
-            <button onClick={startGame} style={buttonStyle}>START MISSION</button>
-            <button onClick={() => setGameState('shop')} style={buttonStyle}>HANGAR (SHOP)</button>
-            <button onClick={handleLogout} style={{ ...buttonStyle, borderColor: '#f00', color: '#f00' }}>LOGOUT</button>
+        <div id="menu-screen" className="overlay">
+          <h1>Greetings, {user.username}</h1>
+          <p className="credits">TOTAL CREDITS: {user.totalPoints}</p>
+          <div id="menu-actions">
+            <button className="btn" onClick={startGame}>START MISSION</button>
+            <button className="btn" onClick={() => setGameState('shop')}>HANGAR (SHOP)</button>
+            <button className="btn btn--danger" onClick={handleLogout}>LOGOUT</button>
           </div>
         </div>
       )}
 
+      {/* ── Hangar / Shop ─────────────────────────────────────────────── */}
       {gameState === 'shop' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-          backgroundColor: 'rgba(0, 5, 5, 0.95)', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', color: '#fff', zIndex: 100, overflowY: 'auto', padding: '40px',
-          boxSizing: 'border-box'
-        }}>
-          <h1 style={{ fontSize: '3em', color: '#0ff', marginBottom: '6px' }}>SHIP HANGAR</h1>
-          <p style={{ fontSize: '1.5em', color: '#ffcc00', marginBottom: '30px' }}>AVAILABLE CREDITS: {user.totalPoints.toLocaleString()}</p>
+        <div id="hangar-screen" className="overlay">
+          <button id="hangar-back" className="btn-back" onClick={() => setGameState('menu')}>
+            &larr; BACK
+          </button>
 
-          {/* Two-column layout */}
-          <div style={{ display: 'flex', gap: '50px', alignItems: 'flex-start', width: '100%', maxWidth: '1100px' }}>
+          <div id="hangar-header">
+            <h3>SHIP HANGAR</h3>
+            <p className="credits">{user.totalPoints} CREDITS</p>
+          </div>
 
-            {/* Left — rotating ship preview */}
-            <div style={{ flex: '0 0 auto' }}>
+          <div id="hangar-layout">
+            <div id="ship-preview-panel">
               <ShipPreview skinColor={user.upgrades.skin} accentColor={user.upgrades.accentColor ?? '#ff0000'} width={480} height={420} />
             </div>
 
-            {/* Right — upgrade cards stacked vertically */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div id="hangar-upgrades">
+              {/* Upgrade cards */}
+              {([
+                { id: 'fuel-efficiency', key: 'fuelEfficiency' as keyof Upgrades, label: 'PLASMA EFFICIENCY', desc: 'Reduces fuel drain per level' },
+                { id: 'hull-reinforcement', key: 'maxHealth' as keyof Upgrades, label: 'HULL REINFORCEMENT', desc: 'Increases max hull points' },
+              ] as const).map(({ id, key, label, desc }) => {
+                const level = user.upgrades[key] as number;
+                const isMaxed = level >= 5;
+                return (
+                  <div key={id} className="shop-card">
+                    <div className="shop-card__header">
+                      <h3>{label}</h3>
+                      <span className="shop-card__desc">{desc}</span>
+                    </div>
+                    <div className="shop-card__level">
+                      <div className="level-pips">
+                        {Array.from({ length: 5 }, (_, i) => (
+                          <div key={i} className={`pip${i < level ? ' pip--filled' : ''}`} />
+                        ))}
+                      </div>
+                      <span className="level-label">LVL {level}/5</span>
+                    </div>
+                    {isMaxed ? (
+                      <p className="maxed">FULLY UPGRADED</p>
+                    ) : (
+                      <button className="btn--shop" onClick={() => buyUpgrade(key)}>
+                        UPGRADE — {UPGRADE_COSTS[level + 1].toLocaleString()} CR
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
 
-              <div style={{ ...shopCardStyle, width: '100%', boxSizing: 'border-box' }}>
-                <h3 style={{ margin: '0 0 8px' }}>PLASMA EFFICIENCY</h3>
-                <p style={{ margin: '0 0 12px' }}>Lvl {user.upgrades.fuelEfficiency} / 5</p>
-                {user.upgrades.fuelEfficiency < 5 ? (
-                  <button onClick={() => buyUpgrade('fuelEfficiency')} style={shopButtonStyle}>
-                    UPGRADE ({UPGRADE_COSTS[user.upgrades.fuelEfficiency + 1].toLocaleString()})
-                  </button>
-                ) : <p style={{ color: '#0f0', margin: 0 }}>MAXED</p>}
-              </div>
-
-              <div style={{ ...shopCardStyle, width: '100%', boxSizing: 'border-box' }}>
-                <h3 style={{ margin: '0 0 8px' }}>HULL REINFORCEMENT</h3>
-                <p style={{ margin: '0 0 12px' }}>Lvl {user.upgrades.maxHealth} / 5</p>
-                {user.upgrades.maxHealth < 5 ? (
-                  <button onClick={() => buyUpgrade('maxHealth')} style={shopButtonStyle}>
-                    UPGRADE ({UPGRADE_COSTS[user.upgrades.maxHealth + 1].toLocaleString()})
-                  </button>
-                ) : <p style={{ color: '#0f0', margin: 0 }}>MAXED</p>}
-              </div>
-
-              <div style={{ ...shopCardStyle, width: '100%', boxSizing: 'border-box' }}>
-                <h3 style={{ margin: '0 0 6px' }}>SHIP PAINT JOB</h3>
-                <p style={{ fontSize: '0.9em', color: '#888', margin: '0 0 15px' }}>
-                  {PALETTE_OPTIONS.find(p => p.skinColor === user.upgrades.skin)?.name || 'Custom'}
-                </p>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              {/* Paint card */}
+              <div className="shop-card">
+                <div className="shop-card__header">
+                  <h3>SHIP LIVERY</h3>
+                  <span className="shop-card__desc">
+                    {PALETTE_OPTIONS.find(p => p.skinColor === user.upgrades.skin)?.name || 'Custom'}
+                  </span>
+                </div>
+                <div id="palette-grid">
                   {PALETTE_OPTIONS.map(palette => {
                     const isSelected = user.upgrades.skin === palette.skinColor;
                     return (
                       <div
                         key={palette.skinColor}
+                        className={`palette-swatch${isSelected ? ' palette-swatch--selected' : ''}`}
                         onClick={() => changePalette(palette.skinColor, palette.accentColor)}
                         title={palette.name}
-                        style={{
-                          width: '60px', height: '60px',
-                          border: isSelected ? '4px solid #fff' : '2px solid #555',
-                          cursor: 'pointer', borderRadius: '5px',
-                          overflow: 'hidden',
-                          transition: 'all 0.2s',
-                          boxShadow: isSelected ? '0 0 15px rgba(255,255,255,0.5)' : 'none',
-                          display: 'flex', flexDirection: 'column'
-                        }}
                       >
-                        <div style={{ flex: 1, backgroundColor: palette.skinColor }} />
-                        <div style={{ flex: 1, backgroundColor: palette.accentColor }} />
+                        <div className="palette-swatch__top" style={{ backgroundColor: palette.skinColor }} />
+                        <div className="palette-swatch__bottom" style={{ backgroundColor: palette.accentColor }} />
                       </div>
                     );
                   })}
                 </div>
               </div>
-
             </div>
           </div>
-
-          <button onClick={() => setGameState('menu')} style={{ ...buttonStyle, marginTop: '40px' }}>BACK TO COMMAND</button>
         </div>
       )}
 
+      {/* ── Playing HUD ───────────────────────────────────────────────── */}
       {gameState === 'playing' && (
         <>
-          {/* HUD Layer */}
-          <div style={{
-            position: 'absolute', top: '20px', left: '20px', right: '20px', 
-            display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
-            color: '#0ff', textShadow: '0 0 5px #0ff', pointerEvents: 'none', userSelect: 'none', zIndex: 10
-          }}>
-            {/* Left Stats */}
-            <div>
-              <div style={{ marginBottom: '15px' }}>
-                 <div style={{ fontSize: '0.8em', color: '#888' }}>HULL INTEGRITY</div>
-                 <div style={{ width: '200px', height: '10px', background: '#002222', border: '1px solid #0ff', marginTop: '4px' }}>
-                    <div style={{ width: `${stats.health}%`, height: '100%', background: stats.health < 30 ? '#f00' : '#0ff', transition: 'width 0.3s' }} />
-                 </div>
+          <div id="hud-overlay">
+            <div id="hud-left-stats">
+              <div id="health-section">
+                <div className="hud-label">HULL INTEGRITY <span className="hud-value">{stats.health}/{stats.maxHealth}</span></div>
+                <div id="health-bar" className="hud-bar">
+                  <div id="health-bar-fill" style={{ width: `${(stats.health / stats.maxHealth) * 100}%`, background: (stats.health / stats.maxHealth) < 0.3 ? 'var(--color-danger)' : 'var(--color-cyan)' }} />
+                </div>
               </div>
-              <div>
-                 <div style={{ fontSize: '0.8em', color: '#888' }}>PLASMA RESERVE</div>
-                 <div style={{ width: '200px', height: '10px', background: '#001a33', border: '1px solid #66ccff', marginTop: '4px' }}>
-                    <div style={{ width: `${stats.fuel}%`, height: '100%', background: '#66ccff', transition: 'width 0.1s' }} />
-                 </div>
+              <div id="fuel-section">
+                <div className="hud-label">PLASMA RESERVE <span className="hud-value">{stats.fuel}/{stats.maxFuel}</span></div>
+                <div id="fuel-bar" className="hud-bar">
+                  <div id="fuel-bar-fill" style={{ width: `${(stats.fuel / stats.maxFuel) * 100}%` }} />
+                </div>
               </div>
             </div>
 
-            {/* Center Title */}
-            <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '1.2em', fontWeight: 'bold' }}>PILOT: {user.username}</div>
-                <div style={{ fontSize: '0.7em', color: '#888' }}>STATUS: MISSION ACTIVE</div>
-                {stats.statusMessage && (
-                  <div style={{
-                    fontSize: '0.9em',
-                    fontWeight: 'bold',
-                    color: '#66ccff',
-                    textShadow: '0 0 8px #66ccff, 0 0 16px #66ccff',
-                    marginTop: '6px',
-                    animation: 'statusPop 0.3s ease-out',
-                  }}>
-                    {stats.statusMessage}
+            <div id="hud-center-status">
+              {stats.warning && (
+                <div id="hud-warning" key={stats.warning}>{stats.warning}</div>
+              )}
+              {!stats.warning && statusText && (
+                <div id="hud-status-message" className={statusClass} key={statusText}>
+                  {statusText}
+                </div>
+              )}
+            </div>
+
+            <div id="hud-right-stats">
+              <div id="hud-points">{stats.points.toLocaleString()} PTS</div>
+              <div id="hud-speed">SPD: {stats.speed} km/h</div>
+              <div id="hud-altitude">ALT: {stats.alt} m</div>
+              <div id="hud-distance">DST: {stats.dist} m</div>
+            </div>
+          </div>
+
+          <div id="crosshair">+</div>
+
+          {stats.warning && <div id="warning-vignette" />}
+          {stats.isCrashing && <div id="crash-flash-overlay" />}
+
+          {/* ── Pause overlay ─────────────────────────────────────────── */}
+          {isPaused && (
+            <div id="pause-overlay" className="overlay">
+              <h1>MISSION PAUSED</h1>
+              <p className="pause-subtitle">Press ESC to resume</p>
+
+              <div id="pause-help-layout">
+                <div id="pause-controls-section">
+                  <h2 className="pause-section-title">FLIGHT CONTROLS</h2>
+                  <table className="controls-table">
+                    <tbody>
+                      {([
+                        ['W / \u2191', 'Pitch up + thrust boost'],
+                        ['S / \u2193', 'Pitch down'],
+                        ['A / \u2190', 'Roll left'],
+                        ['D / \u2192', 'Roll right'],
+                        ['Q', 'Yaw left (rudder)'],
+                        ['E', 'Yaw right (rudder)'],
+                        ['ESC', 'Pause / Resume'],
+                      ] as [string, string][]).map(([key, desc]) => (
+                        <tr key={key}>
+                          <td>{key}</td>
+                          <td>{desc}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div id="pause-tips-section">
+                  <h2 className="pause-section-title">HOW TO SURVIVE</h2>
+                  <div id="pause-tips-list">
+                    <div>
+                      <span className="tip-label--plasma">PLASMA BEAMS</span><br />
+                      Cyan beams shoot up from ground stations. Fly through them to refuel.
+                      The closer you fly to the base, the more plasma you collect.
+                      Beams expire after 30 seconds — don't wait too long.
+                    </div>
+                    <div>
+                      <span className="tip-label--danger">ALTITUDE</span><br />
+                      Stay between 15m and 120m. Too low triggers crash warnings.
+                      Above 120m drains plasma 4x faster. Above 200m is a 3-second death sentence.
+                    </div>
+                    <div>
+                      <span className="tip-label--speed">SPEED</span><br />
+                      Diving builds speed, climbing bleeds it. Hold W during climbs for a thrust boost.
+                      At high speed, controls stiffen — plan your dives carefully.
+                    </div>
+                    <div>
+                      <span className="tip-label--banking">BANKING</span><br />
+                      Roll into turns — the ship automatically yaws in the roll direction.
+                      You rarely need Q/E for normal flying.
+                    </div>
                   </div>
-                )}
-            </div>
+                </div>
+              </div>
 
-            {/* Right Stats */}
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '1.5em' }}>{stats.points.toLocaleString()} PTS</div>
-              <div style={{ marginTop: '10px' }}>SPD: {stats.speed} km/h</div>
-              <div>ALT: {stats.alt} m</div>
-              <div>DST: {stats.dist} m</div>
-            </div>
-          </div>
-
-          {/* Crosshair */}
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            color: 'rgba(255, 255, 255, 0.6)', fontSize: '2em', fontWeight: 'lighter',
-            pointerEvents: 'none', userSelect: 'none', zIndex: 5, fontFamily: 'sans-serif'
-          }}>
-            +
-          </div>
-
-          {/* Discovery Text */}
-          <div style={{
-            position: 'absolute', top: '40%', left: '50%', transform: `translate(-50%, ${discovery.visible ? '-60%' : '-50%'})`,
-            color: '#fff', fontSize: '2.5em', fontWeight: 'bold', textAlign: 'center',
-            textShadow: '0 0 20px #0ff', opacity: discovery.visible ? 1 : 0,
-            transition: 'opacity 1s, transform 2s', pointerEvents: 'none', letterSpacing: '4px'
-          }}>
-            APPROACHING ZONE<br />
-            <span style={{ fontSize: '1.5em', color: '#0ff' }}>{discovery.name}</span>
-          </div>
-
-          {/* Crash Flashing Light */}
-          {stats.isCrashing && (
-            <div style={{
-                position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-                backgroundColor: 'rgba(255, 0, 0, 0.3)', zIndex: 30,
-                animation: 'crashFlash 0.15s infinite alternate',
-                pointerEvents: 'none'
-            }}>
-                <style>{`
-                    @keyframes crashFlash {
-                        from { opacity: 0; }
-                        to { opacity: 1; }
-                    }
-                    @keyframes statusPop {
-                        0% { opacity: 0; transform: translateY(8px) scale(0.8); }
-                        60% { opacity: 1; transform: translateY(-2px) scale(1.05); }
-                        100% { opacity: 1; transform: translateY(0) scale(1); }
-                    }
-                `}</style>
-            </div>
-          )}
-
-          {/* Altitude Warnings */}
-          {stats.warning && (
-            <div style={{
-                position: 'absolute', top: '20%', left: '50%', transform: 'translate(-50%, -50%)',
-                color: '#f00', fontSize: '2em', fontWeight: 'bold', textAlign: 'center',
-                textShadow: '0 0 10px #f00', animation: 'blink 0.5s infinite', zIndex: 20
-            }}>
-                {stats.warning}
-                <style>{`
-                    @keyframes blink {
-                        0% { opacity: 1; }
-                        50% { opacity: 0; }
-                        100% { opacity: 1; }
-                    }
-                `}</style>
+              <button className="btn" style={{ marginTop: '40px' }} onClick={togglePause}>RESUME MISSION</button>
             </div>
           )}
         </>
       )}
 
-      {/* Game Over Screen */}
+      {/* ── Game Over ─────────────────────────────────────────────────── */}
       {gameState === 'gameOver' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-          backgroundColor: 'rgba(20, 0, 0, 0.8)', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', color: '#fff', zIndex: 100,
-          backdropFilter: 'blur(8px)'
-        }}>
-          <h1 style={{ fontSize: '4em', textShadow: '0 0 20px #f00', marginBottom: '0' }}>MISSION FAILED</h1>
-          <p style={{ color: '#f00', fontSize: '1.2em', letterSpacing: '2px', marginBottom: '40px' }}>{gameOverReason}</p>
-          
-          <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-            <div style={{ fontSize: '2em', color: '#0ff' }}>{stats.points.toLocaleString()}</div>
-            <div style={{ fontSize: '0.8em', color: '#888' }}>UNITS RECOVERED</div>
+        <div id="game-over-screen" className="overlay">
+          <h1>MISSION FAILED</h1>
+          <p className="death-reason">{gameOverReason}</p>
+          <div id="game-over-summary">
+            <div className="points">{stats.points.toLocaleString()}</div>
+            <div className="label">UNITS RECOVERED</div>
           </div>
-
-          <button 
-            onClick={() => setGameState('menu')}
-            style={buttonStyle}
-          >
-            RETURN TO COMMAND
-          </button>
+          <button className="btn" onClick={() => setGameState('menu')}>RETURN TO COMMAND</button>
         </div>
       )}
     </div>
   );
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: '15px 40px', fontSize: '1.2em', cursor: 'pointer',
-  backgroundColor: 'transparent', border: '2px solid #0ff',
-  color: '#0ff', fontWeight: 'bold', boxShadow: '0 0 10px #0ff',
-  transition: 'all 0.2s', outline: 'none'
-};
-
-const shopCardStyle: React.CSSProperties = {
-  background: '#001a1a', border: '1px solid #0ff', padding: '25px',
-  width: '250px', textAlign: 'center', borderRadius: '10px'
-};
-
-const shopButtonStyle: React.CSSProperties = {
-  marginTop: '15px', padding: '10px 20px', background: '#0ff', color: '#000',
-  border: 'none', fontWeight: 'bold', cursor: 'pointer', width: '100%'
 };
 
 export default App;

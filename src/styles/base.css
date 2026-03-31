@@ -1,0 +1,171 @@
+/* ─── Design System ─────────────────────────────────────────────────────────── */
+
+:root {
+  /* Fonts — swap these to change the combo across the entire UI
+   *
+   * Option A (active):  Instrument Sans + IBM Plex Mono  — clean, technical, mission-control
+   * Option B:           Outfit + Fira Code               — rounded, modern, startup-y
+   * Original:           Space Grotesk + Space Mono       — geometric, space-themed
+   */
+  /* --font-heading: 'Instrument Sans', sans-serif; --font-mono: 'IBM Plex Mono', monospace; */
+  --font-heading: 'Outfit', sans-serif;
+  --font-mono: 'Fira Code', monospace;
+  /* --font-heading: 'Space Grotesk', sans-serif; --font-mono: 'Space Mono', monospace; */
+
+  /* Type scale (rem-based for consistency across all screens) */
+  --text-display: 3.5rem;   /* page titles: WELCOME, MISSION PAUSED, MISSION FAILED */
+  --text-title: 2rem;       /* section titles: SHIP HANGAR, card headings */
+  --text-lg: 1.25rem;       /* emphasized data: points, credits, pilot name */
+  --text-base: 1rem;        /* body text, buttons, HUD readouts */
+  --text-sm: 0.85rem;       /* labels, tips, secondary info */
+  --text-xs: 0.7rem;        /* hints, captions, mission status */
+
+  /* Colors — primary palette */
+  --color-cyan: #5BA4CF;           /* steel blue — primary accent, buttons, borders */
+  --color-plasma: #7EC8E3;         /* lighter blue — fuel/plasma theme, in-game glow */
+  --color-red: #D94040;            /* muted crimson */
+  --color-gold: #C9A24C;           /* warm amber — credits, currency */
+  --color-green: #4EBF6A;          /* soft emerald */
+  --color-white: #EAEAEF;          /* off-white — avoids harsh pure white */
+  --color-black: #06060C;          /* near-black with a blue undertone */
+
+  /* Colors — text hierarchy */
+  --color-text-primary: #E2E2EA;   /* clean off-white for readability */
+  --color-text-secondary: #9898A8; /* cool grey for supporting text */
+  --color-text-muted: #d3d3e3;     /* dim grey for labels and hints */
+  --color-text-accent: #5BA4CF;    /* matches primary accent */
+
+  /* Colors — surfaces */
+  --color-surface: #08080E;        /* deep charcoal — page backgrounds */
+  --color-surface-card: #10121A;   /* dark navy — card/panel backgrounds */
+  --color-surface-overlay: rgba(6, 6, 14, 0.88); /* semi-transparent dark blue */
+
+  /* Colors — game feedback */
+  --color-danger: #D94040;         /* clear but not neon red */
+  --color-danger-soft: #C46B6B;    /* softer red for text labels */
+  --color-success: #4EBF6A;        /* calm green — upgrade/maxed states */
+  --color-warning: #D4A843;        /* warm amber — altitude warnings */
+}
+
+/* ─── Global resets ─────────────────────────────────────────────────────────── */
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background-color: var(--color-black);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+}
+
+canvas {
+  display: block;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-heading);
+  margin: 0;
+}
+
+h1 { font-size: var(--text-display); }
+h2 { font-size: var(--text-title); }
+h3 { font-size: var(--text-lg); }
+
+/* ─── Buttons ───────────────────────────────────────────────────────────────── */
+
+.btn {
+  padding: 14px 36px;
+  font-size: var(--text-base);
+  cursor: pointer;
+  background-color: transparent;
+  border: 2px solid var(--color-cyan);
+  color: var(--color-cyan);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  transition: all 0.2s ease-out;
+  outline: none;
+}
+
+.btn:hover {
+  background-color: var(--color-cyan);
+  color: var(--color-black);
+}
+
+.btn--danger {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.btn--danger:hover {
+  background-color: var(--color-danger);
+  color: var(--color-white);
+}
+
+.btn--shop {
+  margin-top: 15px;
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--color-cyan);
+  border: 2px solid var(--color-cyan);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.2s ease-out;
+}
+
+.btn--shop:hover {
+  background-color: var(--color-cyan);
+  color: var(--color-black);
+}
+
+/* ─── Fullscreen overlay base ───────────────────────────────────────────────── */
+
+.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-primary);
+  z-index: 100;
+}
+
+/* ─── App root & canvas ─────────────────────────────────────────────────────── */
+
+#app-root {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+  background-color: var(--color-black);
+}
+
+#game-canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* ─── Keyframes ─────────────────────────────────────────────────────────────── */
+
+@keyframes crashFlash {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes statusPop {
+  0%   { opacity: 0; transform: translateY(8px) scale(0.8); }
+  60%  { opacity: 1; transform: translateY(-2px) scale(1.05); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes blink {
+  0%   { opacity: 1; }
+  50%  { opacity: 0; }
+  100% { opacity: 1; }
+}

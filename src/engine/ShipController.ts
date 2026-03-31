@@ -5,12 +5,12 @@ import { ShipModel } from './ShipModel';
 
 export class ShipController {
   public group: THREE.Group;
-  public currentSpeed: number = CONFIG.cruiseSpeed;
+  public currentSpeed: number = CONFIG.speed.cruise;
   private shipModel: ShipModel;
   private keys: Record<string, boolean> = {};
 
   // Motion tracking for effects
-  private lastSpeed: number = CONFIG.cruiseSpeed;
+  private lastSpeed: number = CONFIG.speed.cruise;
   private lastPitch: number = 0;
   public motionIntensity: number = 0;
   public isThrusting = false;
@@ -34,6 +34,8 @@ export class ShipController {
   }
 
   public update(dtScale: number = 1) {
+    const { speed, shipControls, shipGlow, gravity } = CONFIG;
+
     // Pitch: W (pull up) = -1, S (push down) = 1
     const pIn = (this.keys.w || this.keys.ArrowUp) ? -1 : (this.keys.s || this.keys.ArrowDown) ? 1 : 0;
 
@@ -45,48 +47,45 @@ export class ShipController {
     // Thruster Glow — idle pulse keeps engine visibly "running", W boosts to full
     const isThrusting = !!(this.keys.w || this.keys.ArrowUp);
     this.isThrusting = isThrusting;
-    const idleGlow = 1.6 + Math.sin(Date.now() * 0.0015) * 0.3; // slow 1.3–1.9 pulse
-    const targetGlow = isThrusting ? 8.0 : idleGlow;
+    const idleGlow = shipGlow.idleBase + Math.sin(Date.now() * shipGlow.idleFrequency) * shipGlow.idleAmplitude;
+    const targetGlow = isThrusting ? shipGlow.thrustTarget : idleGlow;
     this.shipModel.glowMaterial.emissiveIntensity = THREE.MathUtils.lerp(
       this.shipModel.glowMaterial.emissiveIntensity,
       targetGlow,
-      isThrusting ? 0.1 : 0.04  // slower fade-out so the transition feels natural
+      isThrusting ? shipGlow.thrustLerp : shipGlow.fadeLerp
     );
 
     // Speed Logic
-    // Base speed + dive/climb impacts
-    // Get forward vector component in world Y axis to see if we are diving or climbing
     const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(this.group.quaternion);
     const isClimbing = forward.y > 0.1;
     const isDiving = forward.y < -0.1;
 
-    // "W" also adds thrust as requested
-    const throttle = (this.keys.w || this.keys.ArrowUp) ? CONFIG.accelRate * 1.5 : 0;
+    // "W" also adds thrust
+    const throttle = (this.keys.w || this.keys.ArrowUp) ? speed.accelRate * speed.throttleMultiplier : 0;
 
     if (isDiving) {
-        this.currentSpeed += (CONFIG.accelRate + (Math.abs(forward.y) * CONFIG.gravitySpeedImpact)) * dtScale;
+        this.currentSpeed += (speed.accelRate + (Math.abs(forward.y) * speed.gravityImpact)) * dtScale;
     } else if (isClimbing) {
-        this.currentSpeed -= ((CONFIG.decelRate + (forward.y * CONFIG.gravitySpeedImpact)) - throttle) * dtScale;
+        this.currentSpeed -= ((speed.decelRate + (forward.y * speed.gravityImpact)) - throttle) * dtScale;
     } else {
         // Friction / drag towards cruise speed
-        this.currentSpeed += (CONFIG.cruiseSpeed - this.currentSpeed) * 0.01 * dtScale;
+        this.currentSpeed += (speed.cruise - this.currentSpeed) * speed.drag * dtScale;
         this.currentSpeed += throttle * dtScale;
     }
 
-    // Biome-based speed boost
-    this.currentSpeed = THREE.MathUtils.clamp(this.currentSpeed, CONFIG.minSpeed, CONFIG.maxSpeed);
+    this.currentSpeed = THREE.MathUtils.clamp(this.currentSpeed, speed.min, speed.max);
 
     // Agility Logic: Harder to turn at extreme high speeds
-    const speedFactor = 1.0 - THREE.MathUtils.smoothstep(this.currentSpeed, CONFIG.cruiseSpeed, CONFIG.maxSpeed) * 0.5;
+    const speedFactor = 1.0 - THREE.MathUtils.smoothstep(this.currentSpeed, speed.cruise, speed.max) * shipControls.agilityReduction;
 
-    // Control authority - how much torque each input applies (acceleration per frame)
-    const pitchTorque = 0.0012 * speedFactor;
-    const rollTorque = 0.0035 * speedFactor;
-    const yawTorque = 0.0008 * speedFactor;
-    const bankingYawInfluence = 0.0015 * speedFactor;
+    // Control authority - how much torque each input applies
+    const pitchTorque = shipControls.pitchTorque * speedFactor;
+    const rollTorque = shipControls.rollTorque * speedFactor;
+    const yawTorque = shipControls.yawTorque * speedFactor;
+    const bankingYawInfluence = shipControls.bankingYaw * speedFactor;
 
-    // Natural nose dip - constant downward pitch tendency
-    const noseDipTorque = 0.00025 * speedFactor;
+    // Natural nose dip
+    const noseDipTorque = shipControls.noseDip * speedFactor;
 
     // Apply control inputs as torque → accelerate angular velocities
     this.angularVelocity.pitch += (pIn * pitchTorque + noseDipTorque) * dtScale;
@@ -97,10 +96,9 @@ export class ShipController {
     this.angularVelocity.yaw += (yIn * yawTorque + inducedYaw) * dtScale;
 
     // Apply damping - air resistance slows rotations
-    const damping = 0.88;  // 0.88 = 12% decay per frame
-    this.angularVelocity.pitch *= damping;
-    this.angularVelocity.roll *= damping;
-    this.angularVelocity.yaw *= damping;
+    this.angularVelocity.pitch *= shipControls.damping;
+    this.angularVelocity.roll *= shipControls.damping;
+    this.angularVelocity.yaw *= shipControls.damping;
 
     // Apply angular velocities to actual ship rotation
     this.group.rotateX(this.angularVelocity.pitch * dtScale);
@@ -108,10 +106,10 @@ export class ShipController {
     this.group.rotateY(this.angularVelocity.yaw * dtScale);
 
     // Constant forward movement in local forward direction
-    this.group.position.add(forward.multiplyScalar(this.currentSpeed * 0.01 * dtScale)); // Scale down for engine
+    this.group.position.add(forward.multiplyScalar(this.currentSpeed * shipControls.forwardScale * dtScale));
 
     // Reduced gravity for better flight feel
-    this.group.position.y -= CONFIG.gravity * 0.15 * dtScale;
+    this.group.position.y -= gravity * shipControls.gravityScale * dtScale;
 
     // Track motion changes for visual effects
     const speedDelta = this.currentSpeed - this.lastSpeed;
@@ -120,13 +118,13 @@ export class ShipController {
     this.lastPitch = pIn;
 
     // Calculate motion intensity (0-1) based on speed changes and pitch maneuvers
-    const speedChangeIntensity = Math.abs(speedDelta) / 5.0;
-    const pitchIntensity = pitchDelta * 2.0;
-    const highSpeedFactor = THREE.MathUtils.clamp((this.currentSpeed - CONFIG.cruiseSpeed) / (CONFIG.maxSpeed - CONFIG.cruiseSpeed), 0, 1);
+    const speedChangeIntensity = Math.abs(speedDelta) / CONFIG.motion.speedChangeDivisor;
+    const pitchIntensity = pitchDelta * CONFIG.motion.pitchMultiplier;
+    const highSpeedFactor = THREE.MathUtils.clamp((this.currentSpeed - speed.cruise) / (speed.max - speed.cruise), 0, 1);
 
     // Combine factors - rapid maneuvers at high speed = max intensity
     this.motionIntensity = THREE.MathUtils.clamp(
-      speedChangeIntensity + pitchIntensity + (highSpeedFactor * 0.3),
+      speedChangeIntensity + pitchIntensity + (highSpeedFactor * CONFIG.motion.highSpeedContribution),
       0,
       1
     );

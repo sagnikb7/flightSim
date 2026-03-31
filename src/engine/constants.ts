@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import gameConfig from './gameConfig.json';
+import gameConfig from './gameConfig';
 
 export interface Biome {
   name: string;
@@ -17,20 +17,11 @@ export const BIOMES: Biome[] = [
   { name: "FROST REACH", fog: 0x080a10, terrainType: 'HILLS', sunColor: 0xccccff, sunIntensity: 0.9 }
 ];
 
+const cfg = gameConfig;
 
 export const CONFIG = {
-  ...gameConfig,
-  cameraOffset: new THREE.Vector3(0, 5, -15),
-  cameraLookAtOffset: new THREE.Vector3(0, 2, 10),
-  chunkSize: 200,
-  chunkRes: 64,
-  renderDist: 3,
-  
-  // Speed Constants (in m/s for engine, converted to km/h for UI)
-  minSpeed: 40,
-  maxSpeed: 250,
-  cruiseSpeed: 100,
-  accelRate: 0.5,
-  decelRate: 0.3,
-  gravitySpeedImpact: 0.8
+  ...cfg,
+  // THREE.js objects derived from config arrays
+  cameraOffset: new THREE.Vector3(...(cfg.camera.offset as [number, number, number])),
+  cameraLookAtOffset: new THREE.Vector3(...(cfg.camera.lookAtOffset as [number, number, number])),
 };
