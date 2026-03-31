@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { CONFIG, BIOMES } from './constants';
+import { CONFIG } from './constants';
 import { Upgrades } from './PersistenceService';
 import { TerrainManager } from './TerrainManager';
 import { ShipController } from './ShipController';
@@ -24,18 +24,22 @@ export class GameEngine {
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer;
   private clock: THREE.Clock;
+  private bloomPass: UnrealBloomPass;
   private terrain: TerrainManager;
   private ship: ShipController;
   private stars: THREE.Group;
   private spaceObjects: THREE.Group = new THREE.Group();
-  private ambientLight: THREE.AmbientLight = null!;
   private sun: THREE.DirectionalLight;
-  private dayNightTime = Math.random(); // Start at random time of day
 
   // Particles
   private particles: THREE.Points;
   private particlePositions: Float32Array;
   private particleActive: boolean[] = [];
+
+  // Speed lines for motion effect
+  private speedLines: THREE.Points;
+  private speedLinePositions: Float32Array;
+  private speedLineVelocities: Float32Array;
 
   // Gameplay State
   private upgrades: Upgrades;
@@ -70,16 +74,26 @@ export class GameEngine {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    // Reduced fog density for better clarity with bloom
-    const fog = new THREE.FogExp2(0x000008, 0.0015);
+    // Atmospheric fog for depth
+    const fog = new THREE.FogExp2(0x000008, 0.00012);
     this.scene.fog = fog;
     this.renderer.setClearColor(0x000002);
 
     this.sun = new THREE.DirectionalLight(0xffffff, 1.5);
-    this.sun.position.set(200, 50, 100); 
+    this.sun.position.set(200, 50, 100);
     this.sun.castShadow = true;
+    this.sun.shadow.mapSize.width = 2048;
+    this.sun.shadow.mapSize.height = 2048;
+    this.sun.shadow.camera.left = -200;
+    this.sun.shadow.camera.right = 200;
+    this.sun.shadow.camera.top = 200;
+    this.sun.shadow.camera.bottom = -200;
+    this.sun.shadow.camera.near = 0.5;
+    this.sun.shadow.camera.far = 500;
     this.scene.add(this.sun);
 
     this.terrain = new TerrainManager(this.scene, fog, this.sun);
@@ -87,6 +101,11 @@ export class GameEngine {
 
     this.ship = new ShipController(this.upgrades);
     this.scene.add(this.ship.group);
+
+    // Spawn ship safely above terrain — terrain height at origin varies by biome
+    const spawnTerrainY = this.terrain.getHeight(0, 0) - 50;
+    // 35 units of clearance, capped at y=70 (alt=120) to stay below high-altitude warning
+    this.ship.group.position.y = THREE.MathUtils.clamp(spawnTerrainY + 35, 5, 70);
 
     this.stars = this.createStars();
     this.scene.add(this.stars);
@@ -117,13 +136,41 @@ export class GameEngine {
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
 
-    const bloomPass = new UnrealBloomPass(
+    this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
       0.8, // strength
       0.3, // radius
       0.8 // threshold
     );
-    this.composer.addPass(bloomPass);
+    this.composer.addPass(this.bloomPass);
+
+    // Speed lines for motion blur effect
+    const speedLineCount = 100;
+    const speedGeo = new THREE.BufferGeometry();
+    this.speedLinePositions = new Float32Array(speedLineCount * 3);
+    this.speedLineVelocities = new Float32Array(speedLineCount * 3);
+
+    for(let i = 0; i < speedLineCount; i++) {
+      this.speedLinePositions[i * 3] = 0;
+      this.speedLinePositions[i * 3 + 1] = -1000;
+      this.speedLinePositions[i * 3 + 2] = 0;
+      this.speedLineVelocities[i * 3] = (Math.random() - 0.5) * 2;
+      this.speedLineVelocities[i * 3 + 1] = (Math.random() - 0.5) * 2;
+      this.speedLineVelocities[i * 3 + 2] = Math.random() * -5 - 5;
+    }
+
+    speedGeo.setAttribute('position', new THREE.BufferAttribute(this.speedLinePositions, 3));
+    this.speedLines = new THREE.Points(
+      speedGeo,
+      new THREE.PointsMaterial({
+        color: 0x00ffff,
+        size: 0.8,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending
+      })
+    );
+    this.scene.add(this.speedLines);
 
     window.addEventListener('resize', this.onResize.bind(this));
   }
@@ -230,8 +277,12 @@ export class GameEngine {
   }
 
   private setupLighting() {
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-    this.scene.add(this.ambientLight);
+    // Hemisphere light for natural sky/ground ambient
+    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x5a4a3a, 0.5);
+    this.scene.add(hemiLight);
+
+    // Soft ambient fill
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.3));
   }
 
   private triggerFuelEffect(pos: THREE.Vector3) {
@@ -269,19 +320,58 @@ export class GameEngine {
     attr.needsUpdate = true;
   }
 
+  private updateSpeedLines(motionIntensity: number) {
+    const attr = this.speedLines.geometry.attributes.position as THREE.BufferAttribute;
+    const material = this.speedLines.material as THREE.PointsMaterial;
+
+    // Fade in/out based on motion intensity
+    material.opacity = THREE.MathUtils.lerp(material.opacity, motionIntensity * 0.8, 0.1);
+
+    // Only animate if visible
+    if (material.opacity > 0.05) {
+      const shipPos = this.ship.group.position;
+      const shipForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.ship.group.quaternion);
+
+      for (let i = 0; i < this.speedLinePositions.length / 3; i++) {
+        const px = attr.getX(i);
+        const py = attr.getY(i);
+        const pz = attr.getZ(i);
+
+        // Move lines backward relative to ship
+        const newX = px + this.speedLineVelocities[i * 3] * motionIntensity;
+        const newY = py + this.speedLineVelocities[i * 3 + 1] * motionIntensity;
+        const newZ = pz + this.speedLineVelocities[i * 3 + 2] * motionIntensity * 2;
+
+        // Reset if too far behind
+        const dist = Math.sqrt(
+          Math.pow(newX - shipPos.x, 2) +
+          Math.pow(newY - shipPos.y, 2) +
+          Math.pow(newZ - shipPos.z, 2)
+        );
+
+        if (dist > 50 || newZ < shipPos.z - 40) {
+          // Respawn in front of ship
+          const spreadX = (Math.random() - 0.5) * 30;
+          const spreadY = (Math.random() - 0.5) * 20;
+          const spreadZ = (Math.random() - 0.5) * 10;
+
+          attr.setX(i, shipPos.x + shipForward.x * 20 + spreadX);
+          attr.setY(i, shipPos.y + shipForward.y * 20 + spreadY);
+          attr.setZ(i, shipPos.z + shipForward.z * 20 + spreadZ);
+        } else {
+          attr.setX(i, newX);
+          attr.setY(i, newY);
+          attr.setZ(i, newZ);
+        }
+      }
+
+      attr.needsUpdate = true;
+    }
+  }
+
   private checkCollisions() {
-    const shipBox = new THREE.Box3().setFromObject(this.ship.group);
     const terrainHeight = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) - 50;
     if (this.ship.group.position.y < terrainHeight + 1) this.triggerDeath("CRASHED INTO TERRAIN");
-
-    for (const ast of this.terrain.obstacles) {
-      if (shipBox.intersectsBox(new THREE.Box3().setFromObject(ast))) {
-        this.health -= 20;
-        this.shakeTimer = 0.5;
-        ast.position.add(new THREE.Vector3(0, 0, 50));
-        if (this.health <= 0) this.triggerDeath("HULL INTEGRITY CRITICAL");
-      }
-    }
 
     const worldPos = new THREE.Vector3();
     for (const cell of this.terrain.fuelCells) {
@@ -329,61 +419,6 @@ export class GameEngine {
       return;
     }
 
-    // Day/Night Cycle Logic
-    if (CONFIG.day_night_cycle) {
-      this.dayNightTime = (this.dayNightTime + CONFIG.dayNightSpeed * dtScale) % 1.0;
-      const angle = this.dayNightTime * Math.PI * 2;
-
-      // Sun position arc
-      const sunDist = 1000;
-      this.sun.position.set(
-        Math.cos(angle) * sunDist,
-        Math.sin(angle) * sunDist,
-        200 // Slight offset
-      );
-
-      // Sun height factor (0 at horizon, 1 at peak, -1 at midnight)
-      const sunHeight = Math.sin(angle);
-      const dayFactor = THREE.MathUtils.clamp(sunHeight * 2, 0, 1); // Sharper transition at horizon
-
-      // Adjust Ambient Light
-      this.ambientLight.intensity = 0.1 + (dayFactor * 0.4);
-
-      // Adjust Sun Intensity (fades as it sets)
-      this.sun.intensity = Math.max(0.1, dayFactor * 1.5);
-
-      // Adjust Sky Color (Clear Color)
-      // Transition from deep space black/blue to a warmer sunset/dawn to a brighter day sky
-      const nightSky = new THREE.Color(0x000002);
-      const horizonSky = new THREE.Color(0x1a0800); // Warm orange/brown tint
-      const daySky = new THREE.Color(0x0a1a33); // Darker blue-ish for alien feel
-
-      let currentSky;
-      if (sunHeight > 0.1) {
-        currentSky = new THREE.Color().copy(horizonSky).lerp(daySky, (sunHeight - 0.1) * 2);
-      } else if (sunHeight > -0.1) {
-        currentSky = new THREE.Color().copy(nightSky).lerp(horizonSky, (sunHeight + 0.1) * 5);
-      } else {
-        currentSky = new THREE.Color().copy(nightSky);
-      }
-      this.renderer.setClearColor(currentSky);
-
-      // Tint Fog based on day/night
-      const baseFogColor = this.scene.fog instanceof THREE.FogExp2 ? this.scene.fog.color : new THREE.Color(0x000008);
-      const nightFog = new THREE.Color(0x000005); // Very dark blue/black
-      const tintedFog = new THREE.Color().copy(nightFog).lerp(baseFogColor, 0.2 + (dayFactor * 0.8));
-      if (this.scene.fog instanceof THREE.FogExp2) {
-        this.scene.fog.color.copy(tintedFog);
-      }
-
-      // Stars Opacity (faint during day)
-      const starOpacity = 1.0 - (dayFactor * 0.9);
-      this.stars.children.forEach(layer => {
-        const mat = (layer as THREE.Points).material as THREE.PointsMaterial;
-        mat.opacity = starOpacity;
-      });
-    }
-
     if (this.isCrashing) {
         this.crashTimer -= dt;
         this.shakeTimer = Math.max(this.shakeTimer, 0.8);
@@ -405,8 +440,7 @@ export class GameEngine {
     const deltaDist = distTotal - this.lastDist;
     this.lastDist = distTotal;
 
-    const pointsMultiplier = 0.1 + (Math.floor(dist2D / CONFIG.biomeDist) * 0.1);
-    this.points += deltaDist * pointsMultiplier;
+    this.points += deltaDist * 0.1;
 
     const alt = this.ship.group.position.y + 50;
 
@@ -443,16 +477,32 @@ export class GameEngine {
         this.fuel -= currentFuelDrain * dtScale;
         if (this.fuel <= 0) this.triggerDeath("FUEL EXHAUSTED");
 
-        const speedBiomeMultiplier = this.terrain.getSpeedMultiplier();
-        this.ship.update(speedBiomeMultiplier, dtScale);
+        this.ship.update(dtScale);
+
+        // Motion effects: screen shake and visual feedback based on acceleration/maneuvers
+        const motionIntensity = this.ship.motionIntensity;
+
+        // Trigger shake only at high speed (above midpoint between cruise and max)
+        const shakeSpeedThreshold = (CONFIG.cruiseSpeed + CONFIG.maxSpeed) / 2;
+        if (motionIntensity > 0.4 && this.shakeTimer < 0.2 && this.ship.currentSpeed > shakeSpeedThreshold) {
+          this.shakeTimer = Math.max(this.shakeTimer, motionIntensity * 0.5);
+        }
+
+        // Update bloom intensity based on speed
+        const speedRatio = (this.ship.currentSpeed - CONFIG.minSpeed) / (CONFIG.maxSpeed - CONFIG.minSpeed);
+        this.bloomPass.strength = 0.8 + (speedRatio * 0.6); // 0.8 to 1.4
+
+        // Update speed lines
+        this.updateSpeedLines(motionIntensity);
     }
 
     const idealPos = CONFIG.cameraOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
     if (this.shakeTimer > 0) {
-      // Increased shake intensity from 2 to 5 for more impact
-      idealPos.x += (Math.random() - 0.5) * 5;
-      idealPos.y += (Math.random() - 0.5) * 5;
-      idealPos.z += (Math.random() - 0.5) * 5;
+      // Variable shake intensity based on timer value
+      const shakeStrength = this.shakeTimer * 10;
+      idealPos.x += (Math.random() - 0.5) * shakeStrength;
+      idealPos.y += (Math.random() - 0.5) * shakeStrength;
+      idealPos.z += (Math.random() - 0.5) * shakeStrength;
       this.shakeTimer -= dt;
     }
     this.camera.position.lerp(idealPos, CONFIG.cameraLerp);
@@ -477,10 +527,11 @@ export class GameEngine {
     this.terrain.update(this.ship.group.position, this.scene, dist2D);
     this.checkCollisions();
     this.updateParticles();
-
-    // Space objects and stars follow camera to stay "infinite"
+    
+    // Space objects, stars, and speed lines follow camera to stay "infinite"
     this.stars.position.copy(this.camera.position);
     this.spaceObjects.position.copy(this.camera.position);
+    this.speedLines.position.copy(this.ship.group.position);
 
     // Rotate space objects (planets/moons)
     this.spaceObjects.children.forEach(obj => {

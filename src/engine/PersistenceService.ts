@@ -1,7 +1,8 @@
 export interface Upgrades {
   fuelEfficiency: number; // 0 to 5
   maxHealth: number;      // 0 to 5
-  skin: string;           // Hex color string
+  skin: string;           // Hex color string (hull)
+  accentColor: string;    // Hex color string (accent)
 }
 
 export interface UserData {
@@ -53,7 +54,8 @@ export const PersistenceService = {
         upgrades: {
           fuelEfficiency: 0,
           maxHealth: 0,
-          skin: '#888888'
+          skin: '#888888',
+          accentColor: '#ff0000'
         }
       };
       PersistenceService.saveUser(newUser);

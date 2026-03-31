@@ -1,20 +1,26 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GameEngine, GameStats } from './engine/GameEngine';
 import { PersistenceService, UserData, Upgrades } from './engine/PersistenceService';
+import { ShipPreview } from './components/ShipPreview';
+import { MusicManager } from './engine/MusicManager';
 
-const SKIN_OPTIONS = [
-  { name: 'Classic Grey', color: '#888888' },
-  { name: 'Neon Blue', color: '#00ffff' },
-  { name: 'Crimson Fury', color: '#ff0000' },
-  { name: 'Emerald Wind', color: '#00ff88' },
-  { name: 'Gold Leaf', color: '#ffcc00' }
+// 5 palettes based on color theory — each pair is designed to complement each other
+const PALETTE_OPTIONS = [
+  { name: 'Solar Flare',     skinColor: '#F5E6C8', accentColor: '#E8721A' }, // burnt orange + cream (warm analogous)
+  { name: 'Deep Void',       skinColor: '#1A2680', accentColor: '#FFD700' }, // navy + gold (complementary)
+  { name: 'Crimson Strike',  skinColor: '#CC1515', accentColor: '#C8C8C8' }, // crimson + silver (neutral pair)
+  { name: 'Nebula Ghost',    skinColor: '#4A0E6E', accentColor: '#00E5FF' }, // deep purple + cyan (complementary)
+  { name: 'Arctic Phantom',  skinColor: '#0D4F6E', accentColor: '#E0F7FA' }, // dark teal + ice white (cool analogous)
 ];
+
+
 
 const UPGRADE_COSTS = [0, 5000, 15000, 30000, 60000, 100000];
 
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const musicRef = useRef<MusicManager | null>(null);
   
   const [user, setUser] = useState<UserData | null>(PersistenceService.getCurrentUser());
   const [usernameInput, setUsernameInput] = useState('');
@@ -72,13 +78,14 @@ const App: React.FC = () => {
     }
   };
 
-  const changeSkin = (color: string) => {
+  const changePalette = (skinColor: string, accentColor: string) => {
     if (!user) return;
     const updatedUser = {
       ...user,
       upgrades: {
         ...user.upgrades,
-        skin: color
+        skin: skinColor,
+        accentColor
       }
     };
     setUser(updatedUser);
@@ -87,6 +94,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (gameState !== 'playing' || !containerRef.current || !user) return;
+
+    const music = new MusicManager();
+    musicRef.current = music;
+    music.start();
 
     const engine = new GameEngine(containerRef.current, user.upgrades);
     engineRef.current = engine;
@@ -125,6 +136,8 @@ const App: React.FC = () => {
 
     return () => {
       cancelAnimationFrame(animationId);
+      musicRef.current?.stop();
+      musicRef.current = null;
       if (containerRef.current) {
         containerRef.current.innerHTML = '';
       }
@@ -186,54 +199,78 @@ const App: React.FC = () => {
         <div style={{
           position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
           backgroundColor: 'rgba(0, 5, 5, 0.95)', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', color: '#fff', zIndex: 100, overflowY: 'auto', padding: '40px'
+          alignItems: 'center', color: '#fff', zIndex: 100, overflowY: 'auto', padding: '40px',
+          boxSizing: 'border-box'
         }}>
-          <h1 style={{ fontSize: '3em', color: '#0ff', marginBottom: '10px' }}>SHIP HANGAR</h1>
-          <p style={{ fontSize: '1.5em', color: '#ffcc00' }}>AVAILABLE CREDITS: {user.totalPoints.toLocaleString()}</p>
-          
-          <div style={{ display: 'flex', gap: '40px', marginTop: '30px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            {/* Upgrades */}
-            <div style={shopCardStyle}>
-              <h3>FUEL EFFICIENCY</h3>
-              <p>Lvl {user.upgrades.fuelEfficiency} / 5</p>
-              {user.upgrades.fuelEfficiency < 5 ? (
-                <button onClick={() => buyUpgrade('fuelEfficiency')} style={shopButtonStyle}>
-                  UPGRADE ({UPGRADE_COSTS[user.upgrades.fuelEfficiency + 1].toLocaleString()})
-                </button>
-              ) : <p style={{ color: '#0f0' }}>MAXED</p>}
+          <h1 style={{ fontSize: '3em', color: '#0ff', marginBottom: '6px' }}>SHIP HANGAR</h1>
+          <p style={{ fontSize: '1.5em', color: '#ffcc00', marginBottom: '30px' }}>AVAILABLE CREDITS: {user.totalPoints.toLocaleString()}</p>
+
+          {/* Two-column layout */}
+          <div style={{ display: 'flex', gap: '50px', alignItems: 'flex-start', width: '100%', maxWidth: '1100px' }}>
+
+            {/* Left — rotating ship preview */}
+            <div style={{ flex: '0 0 auto' }}>
+              <ShipPreview skinColor={user.upgrades.skin} accentColor={user.upgrades.accentColor ?? '#ff0000'} width={480} height={420} />
             </div>
 
-            <div style={shopCardStyle}>
-              <h3>HULL REINFORCEMENT</h3>
-              <p>Lvl {user.upgrades.maxHealth} / 5</p>
-              {user.upgrades.maxHealth < 5 ? (
-                <button onClick={() => buyUpgrade('maxHealth')} style={shopButtonStyle}>
-                  UPGRADE ({UPGRADE_COSTS[user.upgrades.maxHealth + 1].toLocaleString()})
-                </button>
-              ) : <p style={{ color: '#0f0' }}>MAXED</p>}
-            </div>
+            {/* Right — upgrade cards stacked vertically */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
-            {/* Skins */}
-            <div style={{ ...shopCardStyle, width: '400px' }}>
-              <h3>SHIP PAINT JOB</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', justifyContent: 'center', marginTop: '10px' }}>
-                {SKIN_OPTIONS.map(skin => (
-                  <div 
-                    key={skin.color}
-                    onClick={() => changeSkin(skin.color)}
-                    style={{
-                      width: '60px', height: '60px', backgroundColor: skin.color,
-                      border: user.upgrades.skin === skin.color ? '4px solid #fff' : '2px solid #555',
-                      cursor: 'pointer', borderRadius: '5px'
-                    }}
-                    title={skin.name}
-                  />
-                ))}
+              <div style={{ ...shopCardStyle, width: '100%', boxSizing: 'border-box' }}>
+                <h3 style={{ margin: '0 0 8px' }}>FUEL EFFICIENCY</h3>
+                <p style={{ margin: '0 0 12px' }}>Lvl {user.upgrades.fuelEfficiency} / 5</p>
+                {user.upgrades.fuelEfficiency < 5 ? (
+                  <button onClick={() => buyUpgrade('fuelEfficiency')} style={shopButtonStyle}>
+                    UPGRADE ({UPGRADE_COSTS[user.upgrades.fuelEfficiency + 1].toLocaleString()})
+                  </button>
+                ) : <p style={{ color: '#0f0', margin: 0 }}>MAXED</p>}
               </div>
+
+              <div style={{ ...shopCardStyle, width: '100%', boxSizing: 'border-box' }}>
+                <h3 style={{ margin: '0 0 8px' }}>HULL REINFORCEMENT</h3>
+                <p style={{ margin: '0 0 12px' }}>Lvl {user.upgrades.maxHealth} / 5</p>
+                {user.upgrades.maxHealth < 5 ? (
+                  <button onClick={() => buyUpgrade('maxHealth')} style={shopButtonStyle}>
+                    UPGRADE ({UPGRADE_COSTS[user.upgrades.maxHealth + 1].toLocaleString()})
+                  </button>
+                ) : <p style={{ color: '#0f0', margin: 0 }}>MAXED</p>}
+              </div>
+
+              <div style={{ ...shopCardStyle, width: '100%', boxSizing: 'border-box' }}>
+                <h3 style={{ margin: '0 0 6px' }}>SHIP PAINT JOB</h3>
+                <p style={{ fontSize: '0.9em', color: '#888', margin: '0 0 15px' }}>
+                  {PALETTE_OPTIONS.find(p => p.skinColor === user.upgrades.skin)?.name || 'Custom'}
+                </p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                  {PALETTE_OPTIONS.map(palette => {
+                    const isSelected = user.upgrades.skin === palette.skinColor;
+                    return (
+                      <div
+                        key={palette.skinColor}
+                        onClick={() => changePalette(palette.skinColor, palette.accentColor)}
+                        title={palette.name}
+                        style={{
+                          width: '60px', height: '60px',
+                          border: isSelected ? '4px solid #fff' : '2px solid #555',
+                          cursor: 'pointer', borderRadius: '5px',
+                          overflow: 'hidden',
+                          transition: 'all 0.2s',
+                          boxShadow: isSelected ? '0 0 15px rgba(255,255,255,0.5)' : 'none',
+                          display: 'flex', flexDirection: 'column'
+                        }}
+                      >
+                        <div style={{ flex: 1, backgroundColor: palette.skinColor }} />
+                        <div style={{ flex: 1, backgroundColor: palette.accentColor }} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
             </div>
           </div>
 
-          <button onClick={() => setGameState('menu')} style={{ ...buttonStyle, marginTop: '50px' }}>BACK TO COMMAND</button>
+          <button onClick={() => setGameState('menu')} style={{ ...buttonStyle, marginTop: '40px' }}>BACK TO COMMAND</button>
         </div>
       )}
 
@@ -297,7 +334,7 @@ const App: React.FC = () => {
           </div>
 
           {/* Crash Flashing Light */}
-          {(stats.isCrashing || (gameState as string) === 'gameOver') && (
+          {stats.isCrashing && (
             <div style={{
                 position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
                 backgroundColor: 'rgba(255, 0, 0, 0.3)', zIndex: 30,
