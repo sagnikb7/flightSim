@@ -15,12 +15,28 @@ function randomGrayscale(): THREE.Color {
   return new THREE.Color(v, v, v);
 }
 
+// Simple seeded random number generator for deterministic crater placement
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed) * 10000;
+  return x - Math.floor(x);
+}
+
+interface Crater {
+  x: number;
+  z: number;
+  radius: number;
+  depth: number;
+}
+
 export class TerrainManager {
   private noise2D = createNoise2D();
   private terrainChunks: Map<string, THREE.Group> = new Map();
   private terrainMaterial: THREE.MeshStandardMaterial;
-  
+
   public fuelCells: THREE.Group[] = [];
+
+  // Crater storage: chunk key -> array of craters
+  private craters: Map<string, Crater[]> = new Map();
   
   private currentBiomeIndex = 0;
   private nextBiomeIndex = 0;
@@ -124,17 +140,47 @@ export class TerrainManager {
     // Sample noise for both biomes and lerp
     const n1 = this.getNoise(x, z, p1.freq, p1.octaves, p1.ridged);
     const n2 = this.getNoise(x, z, p2.freq, p2.octaves, p2.ridged);
-    
+
     const val1 = Math.pow(n1, p1.power);
     const val2 = Math.pow(n2, p2.power);
 
     const n = THREE.MathUtils.lerp(val1, val2, transition);
     const amp = THREE.MathUtils.lerp(p1.amp, p2.amp, transition);
-    
+
     const baseHeight = amp;
     const offset = -45;
 
-    return (n * baseHeight) + offset;
+    let height = (n * baseHeight) + offset;
+
+    // Apply crater deformation
+    // Check the chunk containing this point and adjacent chunks
+    const cx = Math.floor(x / CONFIG.chunkSize);
+    const cz = Math.floor(z / CONFIG.chunkSize);
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const chunkKey = `${cx + dx},${cz + dz}`;
+        const craterList = this.craters.get(chunkKey);
+
+        if (craterList) {
+          for (const crater of craterList) {
+            const distX = x - crater.x;
+            const distZ = z - crater.z;
+            const distToCrater = Math.sqrt(distX * distX + distZ * distZ);
+
+            if (distToCrater < crater.radius) {
+              // Smooth falloff: depth * (1 - (distance/radius)²)²
+              const normalizedDist = distToCrater / crater.radius;
+              const falloff = 1 - normalizedDist * normalizedDist;
+              const depression = crater.depth * falloff * falloff;
+              height -= depression;
+            }
+          }
+        }
+      }
+    }
+
+    return height;
   }
 
   private createChunk(cx: number, cz: number, scene: THREE.Scene) {
@@ -267,6 +313,40 @@ export class TerrainManager {
       }
     }
 
+    // Generate craters (only in FLAT biomes, deterministically)
+    const chunkKey = `${cx},${cz}`;
+    if (chunkBiome.terrainType === 'FLAT' && !this.craters.has(chunkKey)) {
+      const craterList: Crater[] = [];
+
+      // Use chunk coords as seed
+      const seed = cx * 73856093 ^ cz * 19349663;
+      const rand1 = seededRandom(seed);
+      const rand2 = seededRandom(seed + 1);
+      const rand3 = seededRandom(seed + 2);
+
+      // 30% chance of having craters
+      if (rand1 < 0.3) {
+        // 1-2 craters
+        const craterCount = rand2 < 0.5 ? 1 : 2;
+
+        for (let i = 0; i < craterCount; i++) {
+          const rx = seededRandom(seed + 10 + i * 4);
+          const rz = seededRandom(seed + 11 + i * 4);
+          const rRadius = seededRandom(seed + 12 + i * 4);
+          const rDepth = seededRandom(seed + 13 + i * 4);
+
+          const craterX = cx * CONFIG.chunkSize + (rx - 0.5) * CONFIG.chunkSize * 0.6;
+          const craterZ = cz * CONFIG.chunkSize + (rz - 0.5) * CONFIG.chunkSize * 0.6;
+          const radius = 20 + rRadius * 40; // 20-60 units
+          const depth = 8 + rDepth * 12; // 8-20 units deep
+
+          craterList.push({ x: craterX, z: craterZ, radius, depth });
+        }
+      }
+
+      this.craters.set(chunkKey, craterList);
+    }
+
     group.position.set(cx * CONFIG.chunkSize, -50, cz * CONFIG.chunkSize);
     scene.add(group);
     return group;
@@ -295,6 +375,7 @@ export class TerrainManager {
         });
         scene.remove(group);
         this.terrainChunks.delete(key);
+        this.craters.delete(key); // Clean up crater data
       }
     }
 
