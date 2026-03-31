@@ -100,6 +100,8 @@ const App: React.FC = () => {
       setStats(newStats);
     };
 
+    engine.requestMotionPermission();
+
     engine.onGameOver = (reason) => {
       setGameOverReason(reason);
       setGameState('gameOver');
