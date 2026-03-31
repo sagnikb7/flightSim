@@ -317,6 +317,10 @@ export class GameEngine {
     this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  public async requestMotionPermission(): Promise<boolean> {
+    return this.ship.requestMotionPermission();
+  }
+
   public animate() {
     const rawDt = this.clock.getDelta();
     // Clamp dt to avoid spiral of death on tab-switch or lag spikes
