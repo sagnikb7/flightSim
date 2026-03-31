@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { CONFIG, BIOMES } from './constants';
+import { CONFIG, BIOMES, VISUAL } from './constants';
 import { Upgrades } from './PersistenceService';
 import { TerrainManager } from './TerrainManager';
 import { ShipController } from './ShipController';
@@ -61,8 +61,8 @@ export class GameEngine {
 
   constructor(container: HTMLElement, upgrades: Upgrades) {
     this.upgrades = upgrades;
-    this.maxHealth = CONFIG.maxHealth + (this.upgrades.maxHealth * 20); 
-    this.fuelDrainRate = CONFIG.fuelDrainRate * (1 - (this.upgrades.fuelEfficiency * 0.1)); 
+    this.maxHealth = CONFIG.maxHealth + (this.upgrades.maxHealth * CONFIG.healthUpgradeMultiplier);
+    this.fuelDrainRate = CONFIG.fuelDrainRate * (1 - (this.upgrades.fuelEfficiency * CONFIG.fuelEfficiencyMultiplier)); 
     this.health = this.maxHealth;
 
     this.scene = new THREE.Scene();
@@ -73,11 +73,11 @@ export class GameEngine {
     container.appendChild(this.renderer.domElement);
 
     // Reduced fog density for better clarity with bloom
-    const fog = new THREE.FogExp2(0x000008, 0.0015);
+    const fog = new THREE.FogExp2(0x000008, VISUAL.fogDensity);
     this.scene.fog = fog;
     this.renderer.setClearColor(0x000002);
 
-    this.sun = new THREE.DirectionalLight(0xffffff, 1.5);
+    this.sun = new THREE.DirectionalLight(0xffffff, VISUAL.sunLightIntensity);
     this.sun.position.set(200, 50, 100); 
     this.sun.castShadow = true;
     this.scene.add(this.sun);
@@ -95,17 +95,17 @@ export class GameEngine {
     this.scene.add(this.spaceObjects);
 
     // Initialize Particles
-    const pCount = 200;
+    const pCount = VISUAL.particleCount;
     const pGeo = new THREE.BufferGeometry();
     this.particlePositions = new Float32Array(pCount * 3);
     for(let i=0; i<pCount; i++) {
         this.particlePositions[i*3] = 0;
-        this.particlePositions[i*3+1] = -1000; 
+        this.particlePositions[i*3+1] = -1000;
         this.particlePositions[i*3+2] = 0;
         this.particleActive.push(false);
     }
     pGeo.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3));
-    this.particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x00ffff, size: 0.4, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending }));
+    this.particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x00ffff, size: VISUAL.particleSize, transparent: true, opacity: VISUAL.particleOpacity, blending: THREE.AdditiveBlending }));
     this.scene.add(this.particles);
 
     this.clock = new THREE.Clock();
@@ -119,9 +119,9 @@ export class GameEngine {
 
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.8, // strength
-      0.3, // radius
-      0.8 // threshold
+      VISUAL.bloomStrength,
+      VISUAL.bloomRadius,
+      VISUAL.bloomThreshold
     );
     this.composer.addPass(bloomPass);
 
@@ -230,7 +230,7 @@ export class GameEngine {
   }
 
   private setupLighting() {
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, VISUAL.ambientLightIntensity);
     this.scene.add(this.ambientLight);
   }
 
@@ -271,13 +271,13 @@ export class GameEngine {
 
   private checkCollisions() {
     const shipBox = new THREE.Box3().setFromObject(this.ship.group);
-    const terrainHeight = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) - 50;
+    const terrainHeight = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) - CONFIG.altitudeYOffset;
     if (this.ship.group.position.y < terrainHeight + 1) this.triggerDeath("CRASHED INTO TERRAIN");
 
     for (const ast of this.terrain.obstacles) {
       if (shipBox.intersectsBox(new THREE.Box3().setFromObject(ast))) {
-        this.health -= 20;
-        this.shakeTimer = 0.5;
+        this.health -= CONFIG.asteroidDamage;
+        this.shakeTimer = CONFIG.collisionShakeDuration;
         ast.position.add(new THREE.Vector3(0, 0, 50));
         if (this.health <= 0) this.triggerDeath("HULL INTEGRITY CRITICAL");
       }
@@ -286,9 +286,9 @@ export class GameEngine {
     const worldPos = new THREE.Vector3();
     for (const cell of this.terrain.fuelCells) {
       cell.getWorldPosition(worldPos);
-      if (this.ship.group.position.distanceTo(worldPos) < 6) {
+      if (this.ship.group.position.distanceTo(worldPos) < CONFIG.fuelCellPickupDistance) {
         this.fuel = Math.min(CONFIG.maxFuel, this.fuel + CONFIG.fuelReplenish);
-        this.points += 500; 
+        this.points += CONFIG.fuelPickupPoints; 
         this.triggerFuelEffect(worldPos);
         cell.visible = false;
       }
@@ -299,7 +299,7 @@ export class GameEngine {
     if (this.isGameOver || this.isCrashing) return;
     this.isCrashing = true;
     this.crashReason = reason;
-    this.crashTimer = 0.5; // Faster crash sequence
+    this.crashTimer = CONFIG.crashSequenceDuration;
     this.shakeTimer = 1.0;
 
     // Make ship black immediately
@@ -409,34 +409,34 @@ export class GameEngine {
     const deltaDist = distTotal - this.lastDist;
     this.lastDist = distTotal;
 
-    const pointsMultiplier = 0.1 + (Math.floor(dist2D / CONFIG.biomeDist) * 0.1);
+    const pointsMultiplier = CONFIG.pointsMultiplierBase + (Math.floor(dist2D / CONFIG.biomeDist) * CONFIG.pointsMultiplierIncrement);
     this.points += deltaDist * pointsMultiplier;
 
-    const alt = this.ship.group.position.y + 50;
+    const alt = this.ship.group.position.y + CONFIG.altitudeYOffset;
 
     // Proximity/Crash Detection
     const forward = new THREE.Vector3(0, 0, 10).applyQuaternion(this.ship.group.quaternion);
     const lookAheadPos = this.ship.group.position.clone().add(forward);
-    const terrainHeightAtShip = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) - 50;
-    const terrainHeightAhead = this.terrain.getHeight(lookAheadPos.x, lookAheadPos.z) - 50;
+    const terrainHeightAtShip = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) - CONFIG.altitudeYOffset;
+    const terrainHeightAhead = this.terrain.getHeight(lookAheadPos.x, lookAheadPos.z) - CONFIG.altitudeYOffset;
 
     let currentFuelDrain = this.fuelDrainRate;
     this.altWarning = "";
 
-    const isCloseToGround = this.ship.group.position.y < terrainHeightAtShip + 15;
-    const isApproachingObstacle = this.ship.group.position.y < terrainHeightAhead + 15;
+    const isCloseToGround = this.ship.group.position.y < terrainHeightAtShip + CONFIG.groundProximityThreshold;
+    const isApproachingObstacle = this.ship.group.position.y < terrainHeightAhead + CONFIG.groundProximityThreshold;
 
     if (isCloseToGround || isApproachingObstacle) {
         this.altWarning = "PULL UP!";
         // Increased persistent shake during warning
         this.shakeTimer = Math.max(this.shakeTimer, 0.4);
-    } else if (alt >= 150) {
-        currentFuelDrain *= 10;
+    } else if (alt >= CONFIG.criticalAltitudeThreshold) {
+        currentFuelDrain *= CONFIG.criticalAltitudeFuelMultiplier;
         this.altGameOverTimer += dt;
-        this.altWarning = `PULL BACK IMMEDIATELY! ${Math.max(0, 3 - this.altGameOverTimer).toFixed(1)}s`;
-        if (this.altGameOverTimer >= 3) this.triggerDeath("LOST IN UPPER ATMOSPHERE");
-    } else if (alt >= 100) {
-        currentFuelDrain *= 4;
+        this.altWarning = `PULL BACK IMMEDIATELY! ${Math.max(0, CONFIG.altitudeTimeout - this.altGameOverTimer).toFixed(1)}s`;
+        if (this.altGameOverTimer >= CONFIG.altitudeTimeout) this.triggerDeath("LOST IN UPPER ATMOSPHERE");
+    } else if (alt >= CONFIG.highAltitudeThreshold) {
+        currentFuelDrain *= CONFIG.highAltitudeFuelMultiplier;
         this.altWarning = "WARNING: HIGH ALTITUDE - FUEL LEAKING";
         this.altGameOverTimer = 0;
     } else {
@@ -453,16 +453,15 @@ export class GameEngine {
 
     const idealPos = CONFIG.cameraOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
     if (this.shakeTimer > 0) {
-      // Increased shake intensity from 2 to 5 for more impact
-      idealPos.x += (Math.random() - 0.5) * 5;
-      idealPos.y += (Math.random() - 0.5) * 5;
-      idealPos.z += (Math.random() - 0.5) * 5;
+      idealPos.x += (Math.random() - 0.5) * CONFIG.cameraShakeIntensity;
+      idealPos.y += (Math.random() - 0.5) * CONFIG.cameraShakeIntensity;
+      idealPos.z += (Math.random() - 0.5) * CONFIG.cameraShakeIntensity;
       this.shakeTimer -= dt;
     }
     this.camera.position.lerp(idealPos, CONFIG.cameraLerp);
 
     // Prevent camera from going through the floor terrain
-    const terrainHeightAtCamera = this.terrain.getHeight(this.camera.position.x, this.camera.position.z) - 50;
+    const terrainHeightAtCamera = this.terrain.getHeight(this.camera.position.x, this.camera.position.z) - CONFIG.altitudeYOffset;
     if (this.camera.position.y < terrainHeightAtCamera + 2) {
       this.camera.position.y = terrainHeightAtCamera + 2;
     }

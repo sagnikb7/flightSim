@@ -34,7 +34,7 @@ export const CONFIG = {
   chunkSize: 200,
   chunkRes: 64,
   renderDist: 2,
-  
+
   // Speed Constants (in m/s for engine, converted to km/h for UI)
   minSpeed: 40,
   maxSpeed: 250,
@@ -42,4 +42,16 @@ export const CONFIG = {
   accelRate: 0.5,
   decelRate: 0.3,
   gravitySpeedImpact: 0.8
+};
+
+export const VISUAL = {
+  fogDensity: 0.0015,
+  bloomStrength: 0.8,
+  bloomRadius: 0.3,
+  bloomThreshold: 0.8,
+  particleCount: 200,
+  particleSize: 0.4,
+  particleOpacity: 0.8,
+  ambientLightIntensity: 0.4,
+  sunLightIntensity: 1.5,
 };

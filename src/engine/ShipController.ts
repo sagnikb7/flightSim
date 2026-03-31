@@ -206,11 +206,11 @@ export class ShipController {
     // Base speed + dive/climb impacts
     // Get forward vector component in world Y axis to see if we are diving or climbing
     const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(this.group.quaternion);
-    const isClimbing = forward.y > 0.1;
-    const isDiving = forward.y < -0.1;
+    const isClimbing = forward.y > CONFIG.climbDiveThreshold;
+    const isDiving = forward.y < -CONFIG.climbDiveThreshold;
 
     // "W" or forward tilt also adds thrust
-    const throttle = isThrusting ? CONFIG.accelRate * 1.5 : 0;
+    const throttle = isThrusting ? CONFIG.accelRate * CONFIG.thrustAccelMultiplier : 0;
 
     if (isDiving) {
         this.currentSpeed += (CONFIG.accelRate + (Math.abs(forward.y) * CONFIG.gravitySpeedImpact)) * dtScale;
@@ -218,7 +218,7 @@ export class ShipController {
         this.currentSpeed -= ((CONFIG.decelRate + (forward.y * CONFIG.gravitySpeedImpact)) - throttle) * dtScale;
     } else {
         // Friction / drag towards cruise speed
-        this.currentSpeed += (CONFIG.cruiseSpeed - this.currentSpeed) * 0.01 * dtScale;
+        this.currentSpeed += (CONFIG.cruiseSpeed - this.currentSpeed) * CONFIG.cruiseSpeedFriction * dtScale;
         this.currentSpeed += throttle * dtScale;
     }
 
@@ -226,16 +226,16 @@ export class ShipController {
     this.currentSpeed = THREE.MathUtils.clamp(this.currentSpeed, CONFIG.minSpeed, CONFIG.maxSpeed);
 
     // Agility Logic: Harder to turn at extreme high speeds
-    const speedFactor = 1.0 - THREE.MathUtils.smoothstep(this.currentSpeed, CONFIG.cruiseSpeed, CONFIG.maxSpeed) * 0.5;
+    const speedFactor = 1.0 - THREE.MathUtils.smoothstep(this.currentSpeed, CONFIG.cruiseSpeed, CONFIG.maxSpeed) * CONFIG.agilitySpeedReduction;
 
-    const pitchSpeed = 0.04 * speedFactor * dtScale;
-    const rollSpeed = 0.065 * speedFactor * dtScale;
-    const rudderSpeed = 0.02 * speedFactor * dtScale;
-    const bankingTurnFactor = 0.025 * speedFactor * dtScale;
+    const pitchSpeed = CONFIG.pitchRotationSpeed * speedFactor * dtScale;
+    const rollSpeed = CONFIG.rollRotationSpeed * speedFactor * dtScale;
+    const rudderSpeed = CONFIG.rudderRotationSpeed * speedFactor * dtScale;
+    const bankingTurnFactor = CONFIG.bankingTurnFactor * speedFactor * dtScale;
 
     // Natural "Dip" / Gravity effect on nose
     // This forces the player to constantly "pull up" slightly to maintain level flight
-    const naturalDip = 0.008 * speedFactor * dtScale;
+    const naturalDip = CONFIG.naturalGravityDip * speedFactor * dtScale;
 
     // Apply incremental rotations
     // pIn is -1 for pull up, 1 for push down.
@@ -248,9 +248,9 @@ export class ShipController {
     this.group.rotateY(yIn * rudderSpeed + inducedYaw);
 
     // Constant forward movement in local forward direction
-    this.group.position.add(forward.multiplyScalar(this.currentSpeed * 0.01 * dtScale)); // Scale down for engine
+    this.group.position.add(forward.multiplyScalar(this.currentSpeed * CONFIG.forwardMovementScale * dtScale));
 
     // Reduced gravity for better flight feel
-    this.group.position.y -= CONFIG.gravity * 0.4 * dtScale;
+    this.group.position.y -= CONFIG.gravity * CONFIG.gravityFlightMultiplier * dtScale;
   }
 }
