@@ -59,6 +59,9 @@ export class GameEngine {
   private altWarning = "";
   private altGameOverTimer = 0;
 
+  // Smoothed delta time to prevent jitter from chunk generation
+  private smoothedDt = 1 / 60;
+
   public onBiomeChange?: (name: string) => void;
   public onUpdateStats?: (stats: GameStats) => void;
   public onGameOver?: (reason: string) => void;
@@ -73,13 +76,14 @@ export class GameEngine {
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    // Cap pixel ratio to 1.5 for consistent cross-browser performance
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    // Atmospheric fog for depth
-    const fog = new THREE.FogExp2(0x000008, 0.00012);
+    // Atmospheric fog for depth - adjusted for render distance
+    const fog = new THREE.FogExp2(0x000008, 0.0001);
     this.scene.fog = fog;
     this.renderer.setClearColor(0x000002);
 
@@ -177,8 +181,8 @@ export class GameEngine {
 
   private createStars(): THREE.Group {
     const group = new THREE.Group();
-    // Randomized density: 3000 to 8000 stars
-    const starCount = 3000 + Math.floor(Math.random() * 5000);
+    // Randomized density: 2000 to 6000 stars
+    const starCount = 2000 + Math.floor(Math.random() * 4000);
     
     // Create organic focal points (clumps)
     const clumps = Array.from({ length: 6 }, () => ({
@@ -410,7 +414,12 @@ export class GameEngine {
   public animate() {
     const rawDt = this.clock.getDelta();
     // Clamp dt to avoid spiral of death on tab-switch or lag spikes
-    const dt = Math.min(rawDt, 0.05);
+    const clampedDt = Math.min(rawDt, 0.033); // Tighter clamp: max 30fps
+
+    // Smooth dt to prevent jitter from chunk generation spikes
+    this.smoothedDt = THREE.MathUtils.lerp(this.smoothedDt, clampedDt, 0.2);
+    const dt = this.smoothedDt;
+
     // Scale factor: 1.0 at 60fps, 0.5 at 120fps, 2.0 at 30fps
     const dtScale = dt * 60;
 
@@ -460,14 +469,14 @@ export class GameEngine {
         this.altWarning = "PULL UP!";
         // Increased persistent shake during warning
         this.shakeTimer = Math.max(this.shakeTimer, 0.4);
-    } else if (alt >= 150) {
+    } else if (alt >= 200) {
         currentFuelDrain *= 10;
         this.altGameOverTimer += dt;
         this.altWarning = `PULL BACK IMMEDIATELY! ${Math.max(0, 3 - this.altGameOverTimer).toFixed(1)}s`;
         if (this.altGameOverTimer >= 3) this.triggerDeath("LOST IN UPPER ATMOSPHERE");
-    } else if (alt >= 100) {
+    } else if (alt >= 120) {
         currentFuelDrain *= 4;
-        this.altWarning = "WARNING: HIGH ALTITUDE - FUEL LEAKING";
+        this.altWarning = "WARNING: HIGH ALTITUDE - FUEL DRAIN INCREASED";
         this.altGameOverTimer = 0;
     } else {
         this.altGameOverTimer = 0;
@@ -483,7 +492,7 @@ export class GameEngine {
         const motionIntensity = this.ship.motionIntensity;
 
         // Trigger shake only at high speed (above midpoint between cruise and max)
-        const shakeSpeedThreshold = (CONFIG.cruiseSpeed + CONFIG.maxSpeed) / 2;
+        const shakeSpeedThreshold = (CONFIG.cruiseSpeed + CONFIG.maxSpeed) / 2.5;
         if (motionIntensity > 0.4 && this.shakeTimer < 0.2 && this.ship.currentSpeed > shakeSpeedThreshold) {
           this.shakeTimer = Math.max(this.shakeTimer, motionIntensity * 0.5);
         }

@@ -15,6 +15,13 @@ export class ShipController {
   public motionIntensity: number = 0;
   public isThrusting = false;
 
+  // Angular velocities for momentum-based flight (rotation per frame)
+  private angularVelocity = {
+    pitch: 0,
+    roll: 0,
+    yaw: 0
+  };
+
   constructor(upgrades: Upgrades) {
     this.shipModel = new ShipModel(upgrades.skin, upgrades.accentColor);
     this.group = this.shipModel.group;
@@ -72,30 +79,39 @@ export class ShipController {
     // Agility Logic: Harder to turn at extreme high speeds
     const speedFactor = 1.0 - THREE.MathUtils.smoothstep(this.currentSpeed, CONFIG.cruiseSpeed, CONFIG.maxSpeed) * 0.5;
 
-    const pitchSpeed = 0.025 * speedFactor;
-    const rollSpeed = 0.065 * speedFactor;
-    const rudderSpeed = 0.02 * speedFactor;
-    const bankingTurnFactor = 0.025 * speedFactor;
+    // Control authority - how much torque each input applies (acceleration per frame)
+    const pitchTorque = 0.0012 * speedFactor;
+    const rollTorque = 0.0035 * speedFactor;
+    const yawTorque = 0.0008 * speedFactor;
+    const bankingYawInfluence = 0.0015 * speedFactor;
 
-    // Natural "Dip" / Gravity effect on nose
-    // This forces the player to constantly "pull up" slightly to maintain level flight
-    const naturalDip = 0.008 * speedFactor * dtScale;
+    // Natural nose dip - constant downward pitch tendency
+    const noseDipTorque = 0.00025 * speedFactor;
 
-    // Apply incremental rotations
-    // pIn is -1 for pull up, 1 for push down.
-    // We add naturalDip to the final pitch change.
-    this.group.rotateX(pIn * pitchSpeed * dtScale + naturalDip);
-    this.group.rotateZ(rIn * rollSpeed * dtScale);
+    // Apply control inputs as torque → accelerate angular velocities
+    this.angularVelocity.pitch += (pIn * pitchTorque + noseDipTorque) * dtScale;
+    this.angularVelocity.roll += rIn * rollTorque * dtScale;
 
-    // Rudder + Natural Banking Turn
-    const inducedYaw = rIn * bankingTurnFactor;
-    this.group.rotateY((yIn * rudderSpeed + inducedYaw) * dtScale);
+    // Yaw from rudder input + induced yaw from banking
+    const inducedYaw = this.angularVelocity.roll * bankingYawInfluence;
+    this.angularVelocity.yaw += (yIn * yawTorque + inducedYaw) * dtScale;
+
+    // Apply damping - air resistance slows rotations
+    const damping = 0.88;  // 0.88 = 12% decay per frame
+    this.angularVelocity.pitch *= damping;
+    this.angularVelocity.roll *= damping;
+    this.angularVelocity.yaw *= damping;
+
+    // Apply angular velocities to actual ship rotation
+    this.group.rotateX(this.angularVelocity.pitch * dtScale);
+    this.group.rotateZ(this.angularVelocity.roll * dtScale);
+    this.group.rotateY(this.angularVelocity.yaw * dtScale);
 
     // Constant forward movement in local forward direction
     this.group.position.add(forward.multiplyScalar(this.currentSpeed * 0.01 * dtScale)); // Scale down for engine
 
     // Reduced gravity for better flight feel
-    this.group.position.y -= CONFIG.gravity * 0.3 * dtScale;
+    this.group.position.y -= CONFIG.gravity * 0.15 * dtScale;
 
     // Track motion changes for visual effects
     const speedDelta = this.currentSpeed - this.lastSpeed;

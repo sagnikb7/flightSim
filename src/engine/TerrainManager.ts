@@ -83,7 +83,8 @@ export class TerrainManager {
   // Grow the biome length array until it covers at least upToDist metres
   private growBiomes(upToDist: number) {
     while (this.biomeCumulative[this.biomeCumulative.length - 1] <= upToDist) {
-      const len = 1000 + Math.random() * 4000; // 1000–5000 m
+      // First biome is always 500m, rest are 1000-5000m
+      const len = this.biomeLengths.length === 0 ? 500 : 1000 + Math.random() * 4000;
       this.biomeLengths.push(len);
       this.biomeCumulative.push(this.biomeCumulative[this.biomeCumulative.length - 1] + len);
     }

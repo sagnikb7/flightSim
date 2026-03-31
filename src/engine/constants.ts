@@ -24,12 +24,12 @@ export const CONFIG = {
   cameraLookAtOffset: new THREE.Vector3(0, 2, 10),
   chunkSize: 200,
   chunkRes: 64,
-  renderDist: 2,
+  renderDist: 3,
   
   // Speed Constants (in m/s for engine, converted to km/h for UI)
   minSpeed: 40,
   maxSpeed: 250,
-  cruiseSpeed: 80,
+  cruiseSpeed: 100,
   accelRate: 0.5,
   decelRate: 0.3,
   gravitySpeedImpact: 0.8

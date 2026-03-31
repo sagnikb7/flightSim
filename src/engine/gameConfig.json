@@ -5,5 +5,5 @@
   "fuelReplenish": 35,
   "fuelCanCount": 3,
   "cameraLerp": 0.1,
-  "gravity": 0.05
+  "gravity": 0.075
 }

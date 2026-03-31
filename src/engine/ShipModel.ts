@@ -72,7 +72,7 @@ export class ShipModel {
   public group: THREE.Group;
   public glowMaterial: THREE.MeshStandardMaterial;
 
-  private static readonly GLOW_COLOR = 0xff3300;
+  private static readonly GLOW_COLOR = 0x66ccff; // Sky blue plasma
 
   constructor(skinColor: string, accentColor = '#ff0000') {
     this.glowMaterial = new THREE.MeshStandardMaterial({
