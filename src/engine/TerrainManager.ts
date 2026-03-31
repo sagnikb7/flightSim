@@ -199,6 +199,74 @@ export class TerrainManager {
       this.fuelCells.push(fuelGroup);
     }
 
+    // Rocks (only in FLAT and HILLS biomes)
+    const chunkCenterX = cx * CONFIG.chunkSize;
+    const chunkCenterZ = cz * CONFIG.chunkSize;
+    const chunkDist = Math.sqrt(chunkCenterX * chunkCenterX + chunkCenterZ * chunkCenterZ);
+    const { idx: chunkBiomeIdx } = this.getBiomeAtDist(chunkDist);
+    const chunkBiome = BIOMES[(chunkBiomeIdx + this.biomeOffset) % BIOMES.length];
+
+    if (chunkBiome.terrainType === 'FLAT' || chunkBiome.terrainType === 'HILLS') {
+      const clusterCount = 2 + Math.floor(Math.random() * 4); // 2-5 clusters
+
+      for (let c = 0; c < clusterCount; c++) {
+        // Random cluster center
+        const clusterX = (Math.random() - 0.5) * CONFIG.chunkSize * 0.8;
+        const clusterZ = (Math.random() - 0.5) * CONFIG.chunkSize * 0.8;
+
+        const rockCount = 3 + Math.floor(Math.random() * 5); // 3-7 rocks per cluster
+
+        for (let r = 0; r < rockCount; r++) {
+          // Offset from cluster center
+          const offsetX = (Math.random() - 0.5) * 15;
+          const offsetZ = (Math.random() - 0.5) * 15;
+
+          const rockX = clusterX + offsetX;
+          const rockZ = clusterZ + offsetZ;
+          const rockY = this.getHeight(chunkCenterX + rockX, chunkCenterZ + rockZ);
+
+          // Random rock size
+          const scale = 0.8 + Math.random() * 2.2; // 0.8-3.0
+
+          // Use dodecahedron for interesting rock shape
+          const geometry = new THREE.DodecahedronGeometry(scale, 0);
+
+          // Rock color based on current biome terrain color + 5-15%
+          const terrainGray = this.currentBiomeColor.r; // grayscale so r=g=b
+          const offset = 0.05 + Math.random() * 0.1; // 5-15%
+          const rockGray = Math.min(1.0, terrainGray + offset);
+
+          // Vary each rock slightly within the offset range
+          const variation = (Math.random() - 0.5) * 0.03; // ±1.5% variation
+          const finalGray = Math.max(0, Math.min(1.0, rockGray + variation));
+
+          const rockColor = new THREE.Color(finalGray, finalGray, finalGray);
+
+          const material = new THREE.MeshStandardMaterial({
+            color: rockColor,
+            flatShading: true,
+            roughness: 0.9,
+            metalness: 0.1
+          });
+
+          const rock = new THREE.Mesh(geometry, material);
+          rock.position.set(rockX, rockY + scale * 0.5, rockZ);
+
+          // Random rotation for variety
+          rock.rotation.set(
+            Math.random() * Math.PI,
+            Math.random() * Math.PI,
+            Math.random() * Math.PI
+          );
+
+          rock.castShadow = true;
+          rock.receiveShadow = true;
+
+          group.add(rock);
+        }
+      }
+    }
+
     group.position.set(cx * CONFIG.chunkSize, -50, cz * CONFIG.chunkSize);
     scene.add(group);
     return group;
