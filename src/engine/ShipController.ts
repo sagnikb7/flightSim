@@ -27,7 +27,10 @@ export class ShipController {
   }
 
   private setupInputs() {
-    window.addEventListener('keydown', (e) => this.keys[e.key] = true);
+    window.addEventListener('keydown', (e) => {
+      this.keys[e.key] = true;
+      if (e.key === 'c' || e.key === 'C') this.recalibrateMotion();
+    });
     window.addEventListener('keyup', (e) => this.keys[e.key] = false);
 
     window.addEventListener('deviceorientation', (e) => {
@@ -161,6 +164,25 @@ export class ShipController {
     group.add(frame);
 
     return group;
+  }
+
+  public async requestMotionPermission(): Promise<boolean> {
+    if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+      try {
+        const permission = await (DeviceOrientationEvent as any).requestPermission();
+        return permission === 'granted';
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  public recalibrateMotion() {
+    this.baselineBeta = null;
+    this.baselineGamma = null;
+    this.motionPitch = 0;
+    this.motionRoll = 0;
   }
 
   public update(biomeMultiplier: number, dtScale: number = 1) {
