@@ -26,16 +26,16 @@ Fly through alien landscapes at 360 km/h, dodge mountain ridges, dive into gorge
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Start dev server (hot reload)
-npm run dev
+pnpm run dev
 
 # Production build
-npm run build
+pnpm run build
 
 # Preview production build
-npm run preview
+pnpm run preview
 ```
 
 Deployable to Netlify, Vercel, or any static host with standard Vite settings.

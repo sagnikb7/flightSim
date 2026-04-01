@@ -89,6 +89,8 @@ h3 { font-size: var(--text-lg); }
 .btn:hover {
   background-color: var(--color-cyan);
   color: var(--color-black);
+  box-shadow: 0 0 20px rgba(91, 164, 207, 0.4);
+  transform: translateY(-1px);
 }
 
 .btn--danger {
@@ -99,6 +101,7 @@ h3 { font-size: var(--text-lg); }
 .btn--danger:hover {
   background-color: var(--color-danger);
   color: var(--color-white);
+  box-shadow: 0 0 20px rgba(217, 64, 64, 0.4);
 }
 
 .btn--shop {
@@ -118,6 +121,7 @@ h3 { font-size: var(--text-lg); }
 .btn--shop:hover {
   background-color: var(--color-cyan);
   color: var(--color-black);
+  box-shadow: 0 0 15px rgba(91, 164, 207, 0.3);
 }
 
 /* ─── Fullscreen overlay base ───────────────────────────────────────────────── */

@@ -150,7 +150,7 @@
   z-index: 4;
   background: radial-gradient(
     ellipse at center,
-    transparent 30%,
+    transparent 25%,
     rgba(217, 64, 64, 0.25) 100%
   );
   animation: vignettePulse 1.5s ease-in-out infinite;

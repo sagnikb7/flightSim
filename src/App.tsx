@@ -6,11 +6,35 @@ import { MusicManager } from './engine/MusicManager';
 import { CONFIG } from './engine/constants';
 
 const PALETTE_OPTIONS = [
-  { name: 'Ghost',     skinColor: '#D8DEE9', accentColor: '#4A9EE5' }, // cool white hull + electric blue accents — clean space agency look
-  { name: 'Stealth',   skinColor: '#2C2F33', accentColor: '#E87420' }, // matte charcoal + signal orange — tactical military
-  { name: 'Titanium',  skinColor: '#8A8D93', accentColor: '#D92B2B' }, // gunmetal silver + racing red — speed demon
-  { name: 'Midnight',  skinColor: '#1B2338', accentColor: '#C9A24C' }, // deep navy + warm gold — luxury flagship
-  { name: 'Phantom',   skinColor: '#1A1A1E', accentColor: '#5BA4CF' }, // near-black + steel blue — covert ops
+  { 
+    name: 'Solaris',     
+    skinColor: '#F4D35E', 
+    accentColor: '#EE964B' 
+  }, // warm golden hull + burnt orange — high-energy, starfighter aesthetic
+
+  { 
+    name: 'Nebula',      
+    skinColor: '#5F4B8B', 
+    accentColor: '#E0A6FF' 
+  }, // deep violet + soft magenta — cosmic / sci-fi exotic
+
+  { 
+    name: 'Verdant',     
+    skinColor: '#2F5D50', 
+    accentColor: '#7DCEA0' 
+  }, // muted green hull + mint accent — industrial / eco-tech hybrid
+
+  { 
+    name: 'Arctic',      
+    skinColor: '#D9EAFD', 
+    accentColor: '#3A86FF' 
+  }, // icy white-blue + vivid azure — clean, high-tech exploration
+
+  { 
+    name: 'Inferno',     
+    skinColor: '#2B0F0F', 
+    accentColor: '#FF3D00' 
+  }, // dark ember base + bright lava orange — aggressive combat profile
 ];
 
 const UPGRADE_COSTS = CONFIG.upgrades.costs;

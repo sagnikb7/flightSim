@@ -18,7 +18,7 @@ const gameConfig = {
     max: 100,
     drainRate: 0.04,        // base plasma consumed per frame-tick
     upgradeEfficiency: 0.1, // 10% drain reduction per upgrade level
-    highAltMultiplier: 4,   // drain multiplier above warningThreshold (120m)
+    highAltMultiplier: 3,   // drain multiplier above warningThreshold (120m)
     criticalAltMultiplier: 10, // drain multiplier above criticalThreshold (200m)
   },
 
@@ -45,7 +45,7 @@ const gameConfig = {
   // Lower = sluggish, higher = twitchy. damping bleeds off rotation each frame.
   // agilityReduction: at max speed, torques are reduced by this fraction (0–1).
   shipControls: {
-    pitchTorque: 0.0012,    // W/S nose up/down responsiveness
+    pitchTorque: 0.0015,    // W/S nose up/down responsiveness
     rollTorque: 0.0035,     // A/D roll responsiveness
     yawTorque: 0.0008,      // Q/E rudder responsiveness
     bankingYaw: 0.0015,     // auto-yaw induced by rolling (coordinated turn)
@@ -59,7 +59,7 @@ const gameConfig = {
   // ── Engine Glow ────────────────────────────────────────────────────────────
   // Controls the exhaust glow animation on the ship engines.
   shipGlow: {
-    idleBase: 1.6,          // resting glow intensity
+    idleBase: 1.4,          // resting glow intensity
     idleAmplitude: 0.3,     // how much the idle pulse oscillates (±0.3)
     idleFrequency: 0.0015,  // pulse speed (radians per ms)
     thrustTarget: 8.0,      // glow intensity when W is held
@@ -116,7 +116,7 @@ const gameConfig = {
     biomes: {
       firstLength: 500,         // metres before first biome change
       minLength: 1000,          // shortest a biome can be after the first
-      maxExtraLength: 4000,     // random extra length added (total: 1000–5000m)
+      maxExtraLength: 1500,     // random extra length added (total: 1000–5000m)
       transitionSpeed: 0.005,   // fog/sun color blend speed between biomes
     },
 
@@ -148,7 +148,7 @@ const gameConfig = {
 
     // Terrain surface material
     material: {
-      roughness: 0.95,      // matte surface (1.0 = fully rough)
+      roughness: 0.8,      // matte surface (1.0 = fully rough)
       metalness: 0.0,       // non-metallic
       grayscaleMin: 0.3,    // darkest possible terrain shade
       grayscaleRange: 0.6,  // range above min (0.3–0.9)
@@ -163,8 +163,8 @@ const gameConfig = {
     baseHeight: 1.2,        // ground pad height
     beamConeSpread: 8.0,    // beam radius at the top of the cone
     beamBaseRadius: 2.0,    // beam radius at the bottom (0 = sharp point, higher = wider base)
-    beamRange: 80,          // how high the beam reaches (units)
-    maxFuelReplenish: 90,   // max fuel at point-blank flyover
+    beamRange: 90,          // how high the beam reaches (units)
+    maxFuelReplenish: 70,   // max fuel at point-blank flyover
     collectionRadius: 15,   // horizontal distance to trigger collection
     shipGlowDuration: 1.2,  // seconds the ship glows after collecting
     lifetime: 30,           // seconds before uncollected recharger expires
@@ -175,15 +175,15 @@ const gameConfig = {
     // Distance from ship where next recharger spawns
     spawning: {
       firstDistance: 500,   // first recharger is placed close so player sees it
-      minDistance: 150,     // closest spawn when fuel is low
-      maxDistance: 400,     // farthest spawn when fuel is full
+      minDistance: 250,     // closest spawn when fuel is low
+      maxDistance: 500,     // farthest spawn when fuel is full
     },
   },
 
   // ── Altitude Rules ─────────────────────────────────────────────────────────
   // Guardrails that punish flying too high or warn when too low.
   altitude: {
-    warningThreshold: 120,  // alt (m) where "HIGH ALTITUDE" warning + 4× drain starts
+    warningThreshold: 150,  // alt (m) where "HIGH ALTITUDE" warning + 4× drain starts
     criticalThreshold: 200, // alt (m) where "PULL BACK" + 10× drain + death timer starts
     criticalTimeout: 3,     // seconds above critical before forced death
     groundWarningOffset: 15,// units above terrain that triggers "PULL UP!" warning
@@ -205,14 +205,14 @@ const gameConfig = {
 
     // Exponential fog — fades distant terrain to black
     fog: {
-      density: 0.0001,      // higher = thicker fog, shorter visibility
+      density: 0.0009,      // higher = thicker fog, shorter visibility
     },
 
     // Collectible particle burst — cyan sparkles that fly toward ship on fuel pickup
     particles: {
       count: 200,           // total particle pool size
       size: 0.4,            // particle dot size
-      opacity: 0.8,         // particle brightness
+      opacity: 0.6,         // particle brightness
       lerp: 0.15,           // how fast particles home toward ship
       collectionThreshold: 0.5, // distance to ship before particle despawns
       minSpawnRadius: 5,    // closest particle spawn distance from pickup

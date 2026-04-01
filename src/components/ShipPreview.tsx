@@ -41,14 +41,14 @@ export const ShipPreview: React.FC<ShipPreviewProps> = ({
     containerRef.current.appendChild(renderer.domElement);
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
 
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
     keyLight.position.set(5, 10, 7);
     scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0x00ffff, 0.3);
+    const fillLight = new THREE.DirectionalLight(0x00ffff, 0.7);
     fillLight.position.set(-5, 5, -5);
     scene.add(fillLight);
 
@@ -63,9 +63,9 @@ export const ShipPreview: React.FC<ShipPreviewProps> = ({
     shipModelRef.current = shipModel;
 
     // Grid platform for context
-    const gridHelper = new THREE.GridHelper(20, 20, 0x00ffff, 0x003333);
-    gridHelper.position.y = -2;
-    scene.add(gridHelper);
+    // const gridHelper = new THREE.GridHelper(20, 20, 0x00ffff, 0x003333);
+    // gridHelper.position.y = -2;
+    // scene.add(gridHelper);
 
     // Mouse controls
     const handleMouseDown = (e: MouseEvent) => {

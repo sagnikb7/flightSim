@@ -22,6 +22,16 @@ export interface GameStats {
   statusMessage: string;
 }
 
+/**
+ * GameEngine: The central orchestrator of the flight simulator.
+ * 
+ * This class manages the entire Three.js lifecycle, including:
+ * - Scene setup (Lighting, Fog, Camera)
+ * - Sub-system initialization (Terrain, Ship, Plasma, Music)
+ * - Game state management (Fuel, Score, Health, Collisions)
+ * - Visual effects (Particles, Speed lines, Stars, Post-processing)
+ * - The core animation loop
+ */
 export class GameEngine {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
@@ -39,12 +49,12 @@ export class GameEngine {
   // Ship glow materials cache for plasma charge effect
   private shipOriginalMaterials: Map<THREE.Mesh, THREE.Material> = new Map();
 
-  // Particles
+  // Particles: Used for fuel/plasma collection effects
   private particles: THREE.Points;
   private particlePositions: Float32Array;
   private particleActive: boolean[] = [];
 
-  // Speed lines for motion effect
+  // Speed lines: Visual feedback for high-speed motion
   private speedLines: THREE.Points;
   private speedLinePositions: Float32Array;
   private speedLineVelocities: Float32Array;
@@ -63,11 +73,11 @@ export class GameEngine {
   private shakeTimer = 0;
   private lastDist = 0;
 
-  // Altitude Guardrails
+  // Altitude Guardrails: Logic for high-altitude penalties
   private altWarning = "";
   private altGameOverTimer = 0;
 
-  // Status message (e.g. "+35 PLASMA")
+  // Status message: Transient UI notifications (e.g. "+35 PLASMA")
   private statusMessage = "";
   private statusMessageTimer = 0;
 
@@ -86,6 +96,7 @@ export class GameEngine {
 
     const { camera, visuals, terrain } = CONFIG;
 
+    // 1. Core Rendering Setup
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(camera.fov, window.innerWidth / window.innerHeight, camera.near, camera.far);
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -95,7 +106,7 @@ export class GameEngine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    // Atmospheric fog
+    // 2. Atmospheric & Environmental Effects
     const fog = new THREE.FogExp2(0x000008, visuals.fog.density);
     this.scene.fog = fog;
     this.renderer.setClearColor(0x000002);
@@ -114,6 +125,7 @@ export class GameEngine {
     this.sun.shadow.camera.far = sunCfg.shadowFar;
     this.scene.add(this.sun);
 
+    // 3. System Managers
     this.terrain = new TerrainManager(this.scene, fog, this.sun);
     this.terrain.onBiomeChange = (name) => this.onBiomeChange?.(name);
 
@@ -125,18 +137,19 @@ export class GameEngine {
     this.ship = new ShipController(this.upgrades);
     this.scene.add(this.ship.group);
 
-    // Spawn ship safely above terrain
+    // 4. Initial Spawn Positioning
     const spawnTerrainY = this.terrain.getHeight(0, 0) + terrain.groupYOffset;
     const { spawnClearance, spawnMinY, spawnMaxY } = CONFIG.altitude;
     this.ship.group.position.y = THREE.MathUtils.clamp(spawnTerrainY + spawnClearance, spawnMinY, spawnMaxY);
 
+    // 5. Background Visuals
     this.stars = this.createStars();
     this.scene.add(this.stars);
 
     this.createSpaceObjects();
     this.scene.add(this.spaceObjects);
 
-    // Initialize Particles
+    // 6. Particle System Initialization
     const particleCfg = visuals.particles;
     const pCount = particleCfg.count;
     const pGeo = new THREE.BufferGeometry();
@@ -152,10 +165,9 @@ export class GameEngine {
     this.scene.add(this.particles);
 
     this.clock = new THREE.Clock();
-
     this.setupLighting();
 
-    // Post-processing
+    // 7. Post-Processing Pipeline
     this.composer = new EffectComposer(this.renderer);
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
@@ -169,7 +181,7 @@ export class GameEngine {
     );
     this.composer.addPass(this.bloomPass);
 
-    // Speed lines for motion blur effect
+    // 8. Motion FX: Speed lines for high-speed flight
     const slCfg = visuals.speedLines;
     const speedLineCount = slCfg.count;
     const speedGeo = new THREE.BufferGeometry();
@@ -201,12 +213,16 @@ export class GameEngine {
     window.addEventListener('resize', this.onResize.bind(this));
   }
 
+  /**
+   * Generates a procedural starfield with clumps, layers, and horizon culling.
+   * Stars are grouped into a single unit that follows the camera for an infinite effect.
+   */
   private createStars(): THREE.Group {
     const group = new THREE.Group();
     const starsCfg = CONFIG.visuals.stars;
     const starCount = starsCfg.minCount + Math.floor(Math.random() * starsCfg.maxExtraCount);
 
-    // Create organic focal points (clumps)
+    // Create organic focal points (clumps) to avoid perfectly uniform distribution
     const clumps = Array.from({ length: starsCfg.clumpCount }, () => ({
         theta: Math.random() * Math.PI * 2,
         phi: Math.acos(2 * Math.random() - 1),
@@ -227,6 +243,7 @@ export class GameEngine {
       for (let i = 0; i < count; i++) {
         let theta, phi;
 
+        // Either cluster near a clump or distribute randomly
         if (Math.random() < starsCfg.clusterChance) {
           const clump = clumps[Math.floor(Math.random() * clumps.length)];
           theta = clump.theta + (Math.random() - 0.5) * clump.spread;
@@ -241,6 +258,7 @@ export class GameEngine {
         const y = r * Math.sin(phi) * Math.sin(theta);
         const z = r * Math.cos(phi);
 
+        // Cull stars below the horizon to improve performance
         if (y > starsCfg.horizonCutoff) {
           vertices.push(x, y, z);
         }
@@ -260,6 +278,10 @@ export class GameEngine {
     return group;
   }
 
+  /**
+   * Spawns random "planets" or space debris at extreme distances
+   * to provide a sense of scale and background depth.
+   */
   private createSpaceObjects() {
     const soCfg = CONFIG.visuals.spaceObjects;
     const count = soCfg.minCount + Math.floor(Math.random() * soCfg.maxCount);
@@ -305,6 +327,10 @@ export class GameEngine {
     this.scene.add(new THREE.AmbientLight(0xffffff, lighting.ambientIntensity));
   }
 
+  /**
+   * Spawns "collection" particles when the ship gathers plasma.
+   * Particles fly from a spawn radius toward the ship.
+   */
   private triggerFuelEffect(pos: THREE.Vector3) {
     const particleCfg = CONFIG.visuals.particles;
     let activated = 0;
@@ -321,6 +347,9 @@ export class GameEngine {
     }
   }
 
+  /**
+   * Manages the visual emissive glow of the ship during plasma recharge.
+   */
   private updateShipGlow() {
     const glowTimer = this.plasmaManager.shipGlowTimer;
     const glowCfg = CONFIG.visuals.shipGlow;
@@ -350,6 +379,9 @@ export class GameEngine {
     }
   }
 
+  /**
+   * Animates active collection particles toward the ship.
+   */
   private updateParticles() {
     const particleCfg = CONFIG.visuals.particles;
     const attr = this.particles.geometry.attributes.position as THREE.BufferAttribute;
@@ -371,6 +403,10 @@ export class GameEngine {
     attr.needsUpdate = true;
   }
 
+  /**
+   * Updates speed lines based on current ship motion.
+   * Higher motion intensity = more visible and faster lines.
+   */
   private updateSpeedLines(motionIntensity: number) {
     const slCfg = CONFIG.visuals.speedLines;
     const attr = this.speedLines.geometry.attributes.position as THREE.BufferAttribute;
@@ -397,6 +433,7 @@ export class GameEngine {
           Math.pow(newZ - shipPos.z, 2)
         );
 
+        // Respawn line if it gets too far or behind the ship
         if (dist > slCfg.respawnDistance || newZ < shipPos.z - slCfg.zCullOffset) {
           const spreadX = (Math.random() - 0.5) * slCfg.spreadX;
           const spreadY = (Math.random() - 0.5) * slCfg.spreadY;
@@ -416,11 +453,17 @@ export class GameEngine {
     }
   }
 
+  /**
+   * Basic AABB/Height check for terrain collision.
+   */
   private checkCollisions() {
     const terrainHeight = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) + CONFIG.terrain.groupYOffset;
     if (this.ship.group.position.y < terrainHeight + CONFIG.altitude.collisionOffset) this.triggerDeath("CRASHED INTO TERRAIN");
   }
 
+  /**
+   * Initiates the game over sequence with a crash animation.
+   */
   private triggerDeath(reason: string) {
     if (this.isGameOver || this.isCrashing) return;
     this.isCrashing = true;
@@ -442,13 +485,16 @@ export class GameEngine {
     this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  /**
+   * The core game loop, called ~60 times per second.
+   */
   public animate() {
     const rawDt = this.clock.getDelta();
+    // Clamp DT to prevent massive jumps during lag or chunk generation
     const clampedDt = Math.min(rawDt, CONFIG.timing.dtClampMax);
-
+    // Smooth DT to reduce jitter
     this.smoothedDt = THREE.MathUtils.lerp(this.smoothedDt, clampedDt, CONFIG.timing.dtLerpFactor);
     const dt = this.smoothedDt;
-
     const dtScale = dt * 60;
 
     if (this.isGameOver) {
@@ -456,6 +502,7 @@ export class GameEngine {
       return;
     }
 
+    // --- 1. CRASH ANIMATION ---
     const crashCfg = CONFIG.crash;
     if (this.isCrashing) {
         this.crashTimer -= dt;
@@ -470,16 +517,17 @@ export class GameEngine {
         }
     }
 
+    // --- 2. PROGRESSION & SCORING ---
     const distTotal = this.ship.group.position.length();
     const dist2D = Math.sqrt(this.ship.group.position.x ** 2 + this.ship.group.position.z ** 2);
     const deltaDist = distTotal - this.lastDist;
     this.lastDist = distTotal;
 
     this.points += deltaDist * 0.1;
-
     const alt = this.ship.group.position.y - CONFIG.terrain.groupYOffset;
 
-    // Proximity/Crash Detection
+    // --- 3. PROXIMITY & ALTITUDE LOGIC ---
+    // Ray-like "look ahead" for collision warnings
     const forward = new THREE.Vector3(0, 0, 10).applyQuaternion(this.ship.group.quaternion);
     const lookAheadPos = this.ship.group.position.clone().add(forward);
     const terrainHeightAtShip = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) + CONFIG.terrain.groupYOffset;
@@ -496,6 +544,7 @@ export class GameEngine {
         this.altWarning = "PULL UP!";
         this.shakeTimer = Math.max(this.shakeTimer, CONFIG.motion.warningShakeTimer);
     } else if (alt >= altCfg.criticalThreshold) {
+        // Punish flying too high (leaving the atmosphere)
         currentFuelDrain *= CONFIG.fuel.criticalAltMultiplier;
         this.altGameOverTimer += dt;
         this.altWarning = `PULL BACK IMMEDIATELY! ${Math.max(0, altCfg.criticalTimeout - this.altGameOverTimer).toFixed(1)}s`;
@@ -508,6 +557,7 @@ export class GameEngine {
         this.altGameOverTimer = 0;
     }
 
+    // --- 4. SHIP & MOVEMENT UPDATES ---
     const { speed } = CONFIG;
     const motionCfg = CONFIG.motion;
 
@@ -519,24 +569,22 @@ export class GameEngine {
 
         const motionIntensity = this.ship.motionIntensity;
 
-        const shakeSpeedThreshold = (speed.cruise + speed.max) / 2.75;
+        // Dynamic camera shake based on speed/turn intensity
+        const shakeSpeedThreshold = (speed.cruise + speed.max) / 2.25;
         if (motionIntensity > motionCfg.shakeThreshold && this.shakeTimer < 0.2 && this.ship.currentSpeed > shakeSpeedThreshold) {
           this.shakeTimer = Math.max(this.shakeTimer, motionIntensity * 0.5);
         }
 
-        // Update bloom intensity based on speed
+        // Visual juice: Bloom intensity matches speed
         const bloomCfg = CONFIG.visuals.bloom;
         const speedRatio = (this.ship.currentSpeed - speed.min) / (speed.max - speed.min);
         this.bloomPass.strength = bloomCfg.baseStrength + (speedRatio * bloomCfg.speedBoost);
 
-        // Dynamic FOV
-        // const cameraCfg = CONFIG.camera;
-        // this.camera.fov = cameraCfg.fov + (speedRatio * (cameraCfg.maxFov - cameraCfg.fov));
-        // this.camera.updateProjectionMatrix();
-
         this.updateSpeedLines(motionIntensity);
     }
 
+    // --- 5. CAMERA ORCHESTRATION ---
+    // Smooth camera following with lerp
     const idealPos = CONFIG.cameraOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
     if (this.shakeTimer > 0) {
       const shakeStrength = this.shakeTimer * motionCfg.shakeStrengthMultiplier;
@@ -547,19 +595,19 @@ export class GameEngine {
     }
     this.camera.position.lerp(idealPos, CONFIG.camera.lerp);
 
-    // Prevent camera from going through the floor terrain
+    // Safety: Prevent camera from clipping into terrain
     const terrainHeightAtCamera = this.terrain.getHeight(this.camera.position.x, this.camera.position.z) + CONFIG.terrain.groupYOffset;
     if (this.camera.position.y < terrainHeightAtCamera + CONFIG.camera.terrainClearance) {
       this.camera.position.y = terrainHeightAtCamera + CONFIG.camera.terrainClearance;
     }
 
-    // Maintain camera 'up' relative to ship for free-roam
+    // Maintain camera 'up' relative to ship for smooth rolls
     const shipUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.ship.group.quaternion);
     this.camera.up.lerp(shipUp, CONFIG.camera.lerp);
 
     this.camera.lookAt(CONFIG.cameraLookAtOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position));
 
-    // Plasma recharger system
+    // --- 6. PLASMA RECHARGE SYSTEM ---
     const plasmaResult = this.plasmaManager.update(
       this.ship.group.position,
       this.ship.group.quaternion,
@@ -574,7 +622,7 @@ export class GameEngine {
       this.statusMessageTimer = CONFIG.timing.statusMessageDuration;
     }
 
-    // Decay status message
+    // Transient UI message decay
     if (this.statusMessageTimer > 0) {
       this.statusMessageTimer -= dt;
       if (this.statusMessageTimer <= 0) this.statusMessage = "";
@@ -582,16 +630,17 @@ export class GameEngine {
 
     this.updateShipGlow();
 
+    // --- 7. ENVIRONMENT & BACKGROUND SYNC ---
     this.terrain.update(this.ship.group.position, this.scene, dist2D);
     this.checkCollisions();
     this.updateParticles();
 
-    // Space objects, stars, and speed lines follow camera to stay "infinite"
+    // Lock background objects to camera/ship to simulate infinite space
     this.stars.position.copy(this.camera.position);
     this.spaceObjects.position.copy(this.camera.position);
     this.speedLines.position.copy(this.ship.group.position);
 
-    // Rotate space objects (planets/moons)
+    // Passive planetary rotation
     this.spaceObjects.children.forEach(obj => {
         if (obj instanceof THREE.Mesh && obj.userData.rotSpeed) {
             obj.rotation.x += obj.userData.rotSpeed.x * dtScale;
@@ -600,6 +649,7 @@ export class GameEngine {
         }
     });
 
+    // --- 8. UI STATE DISPATCH ---
     this.onUpdateStats?.({
       health: Math.round(Math.max(0, this.health)), maxHealth: this.maxHealth,
       fuel: Math.round(Math.max(0, Math.min(this.fuel, CONFIG.fuel.max))), maxFuel: CONFIG.fuel.max,
@@ -612,6 +662,7 @@ export class GameEngine {
       statusMessage: this.statusMessage
     });
 
+    // Final render pass
     this.composer.render();
   }
 }

@@ -215,6 +215,16 @@ export class TerrainManager {
       const [cx, cz] = key.split(',').map(Number);
       if (Math.abs(cx - px) > renderDist || Math.abs(cz - pz) > renderDist) {
         scene.remove(group);
+        group.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.geometry.dispose();
+            if (Array.isArray(obj.material)) {
+              obj.material.forEach((m) => m.dispose());
+            } else {
+              obj.material.dispose();
+            }
+          }
+        });
         this.chunks.delete(key);
         this.craters.delete(key);
       }
