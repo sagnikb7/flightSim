@@ -65,6 +65,7 @@ const gameConfig = {
     thrustTarget: 8.0,      // glow intensity when W is held
     thrustLerp: 0.1,        // how fast glow ramps up on thrust
     fadeLerp: 0.04,         // how fast glow fades back to idle
+    yawGlowDelta: 2.0,      // how much one thruster dims/brightens during yaw
   },
 
   // ── Camera ─────────────────────────────────────────────────────────────────

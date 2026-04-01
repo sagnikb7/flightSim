@@ -117,7 +117,7 @@ export const ShipPreview: React.FC<ShipPreviewProps> = ({
 
       // Pulse engine glow
       const pulse = Math.sin(Date.now() * 0.002) * 0.5 + 2.5;
-      shipModelRef.current.glowMaterial.emissiveIntensity = pulse;
+      shipModelRef.current.setThrusterGlow(pulse, pulse);
 
       renderer.render(scene, camera);
       animationRef.current = requestAnimationFrame(animate);

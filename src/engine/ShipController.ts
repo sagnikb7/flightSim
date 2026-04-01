@@ -44,15 +44,22 @@ export class ShipController {
     // Rudder (Yaw): Q (yaw left) = 1, E (yaw right) = -1
     const yIn = (this.keys.q) ? 1 : (this.keys.e) ? -1 : 0;
 
-    // Thruster Glow — idle pulse keeps engine visibly "running", W boosts to full
+    // Thruster Glow — idle pulse keeps engine visibly "running", W boosts to full.
+    // Yaw input dims one thruster and brightens the opposite (differential thrust).
     const isThrusting = !!(this.keys.w || this.keys.ArrowUp);
     this.isThrusting = isThrusting;
     const idleGlow = shipGlow.idleBase + Math.sin(Date.now() * shipGlow.idleFrequency) * shipGlow.idleAmplitude;
-    const targetGlow = isThrusting ? shipGlow.thrustTarget : idleGlow;
-    this.shipModel.glowMaterial.emissiveIntensity = THREE.MathUtils.lerp(
-      this.shipModel.glowMaterial.emissiveIntensity,
-      targetGlow,
-      isThrusting ? shipGlow.thrustLerp : shipGlow.fadeLerp
+    const baseGlow  = isThrusting ? shipGlow.thrustTarget : idleGlow;
+    const lerpRate  = isThrusting ? shipGlow.thrustLerp : shipGlow.fadeLerp;
+
+    // yIn > 0 (Q = yaw left)  → right thruster brightens, left dims
+    // yIn < 0 (E = yaw right) → left thruster brightens, right dims
+    const leftTarget  = THREE.MathUtils.clamp(baseGlow + yIn * shipGlow.yawGlowDelta, 0, shipGlow.thrustTarget);
+    const rightTarget = THREE.MathUtils.clamp(baseGlow - yIn * shipGlow.yawGlowDelta, 0, shipGlow.thrustTarget);
+
+    this.shipModel.setThrusterGlow(
+      THREE.MathUtils.lerp(this.shipModel.glowMaterialLeft.emissiveIntensity,  leftTarget,  lerpRate),
+      THREE.MathUtils.lerp(this.shipModel.glowMaterialRight.emissiveIntensity, rightTarget, lerpRate),
     );
 
     // Speed Logic

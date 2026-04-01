@@ -70,17 +70,26 @@ const FIN = {
 
 export class ShipModel {
   public group: THREE.Group;
-  public glowMaterial: THREE.MeshStandardMaterial;
+  public glowMaterialLeft:  THREE.MeshStandardMaterial;
+  public glowMaterialRight: THREE.MeshStandardMaterial;
 
   private static readonly GLOW_COLOR = 0x66ccff; // Sky blue plasma
 
   constructor(skinColor: string, accentColor = '#ff0000') {
-    this.glowMaterial = new THREE.MeshStandardMaterial({
+    const makeGlow = () => new THREE.MeshStandardMaterial({
       color: ShipModel.GLOW_COLOR,
       emissive: ShipModel.GLOW_COLOR,
       emissiveIntensity: 1.6,
     });
+    this.glowMaterialLeft  = makeGlow();
+    this.glowMaterialRight = makeGlow();
     this.group = this.buildShip(skinColor, accentColor);
+  }
+
+  /** Set emissive intensity for each thruster independently. */
+  public setThrusterGlow(left: number, right: number): void {
+    this.glowMaterialLeft.emissiveIntensity  = left;
+    this.glowMaterialRight.emissiveIntensity = right;
   }
 
   // ── Orchestrator ─────────────────────────────────────────────────────────────
@@ -224,15 +233,16 @@ export class ShipModel {
     const bodyGeo    = new THREE.CylinderGeometry(0.35, 0.38, 1.50, 12);
     const bandGeo    = new THREE.CylinderGeometry(0.39, 0.39, 0.15, 12);
     const intakeGeo  = new THREE.CylinderGeometry(0.25, 0.25, 0.10, 12);
-    const exhaustGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.12, 12);
+    const exhaustGeo = new THREE.CylinderGeometry(0.20, 0.20, 0.12, 12);
     const rot: V3 = [Math.PI / 2, 0, 0];
 
     [-1, 1].forEach(side => {
       const x = ENGINE.absX * side;
-      ShipModel.addPart(ship, bodyGeo,    engineMat,        [x, ENGINE.y, ENGINE.z], rot);
-      ShipModel.addPart(ship, bandGeo,    accentMat,        [x, ENGINE.y,  0.0    ], rot);
-      ShipModel.addPart(ship, intakeGeo,  darkMat,          [x, ENGINE.y,  0.4    ], rot);
-      ShipModel.addPart(ship, exhaustGeo, this.glowMaterial, [x, ENGINE.y, -1.2    ], rot);
+      const glowMat = side < 0 ? this.glowMaterialLeft : this.glowMaterialRight;
+      ShipModel.addPart(ship, bodyGeo,    engineMat, [x, ENGINE.y, ENGINE.z], rot);
+      ShipModel.addPart(ship, bandGeo,    accentMat, [x, ENGINE.y,  0.0    ], rot);
+      ShipModel.addPart(ship, intakeGeo,  darkMat,   [x, ENGINE.y,  0.4    ], rot);
+      ShipModel.addPart(ship, exhaustGeo, glowMat,   [x, ENGINE.y, -1.2    ], rot);
     });
   }
 
