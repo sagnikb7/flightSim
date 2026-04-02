@@ -301,6 +301,13 @@ export class PlasmaRechargerManager {
   private firstSpawn = true;
 
   /**
+   * Optional callback set by GameEngine to constrain the spawn X coordinate.
+   * Used for CANYON terrain so rechargers only appear inside the gorge.
+   * Receives the candidate (x, z) and returns the adjusted X.
+   */
+  public constrainSpawnX?: (x: number, z: number) => number;
+
+  /**
    * Countdown timer for the ship hull glow effect after collecting plasma.
    * GameEngine reads this each frame to set emissive intensity on ship meshes.
    */
@@ -392,8 +399,9 @@ export class PlasmaRechargerManager {
     forward.normalize();
     forward.applyAxisAngle(new THREE.Vector3(0, 1, 0), angleOffset);
 
-    const spawnX = shipPos.x + forward.x * spawnDist;
+    let spawnX = shipPos.x + forward.x * spawnDist;
     const spawnZ = shipPos.z + forward.z * spawnDist;
+    if (this.constrainSpawnX) spawnX = this.constrainSpawnX(spawnX, spawnZ);
     const groundY = this.getTerrainHeight(spawnX, spawnZ) + CONFIG.terrain.groupYOffset;
 
     const recharger = new PlasmaRecharger(spawnX, groundY, spawnZ);

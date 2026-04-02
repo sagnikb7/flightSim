@@ -16,14 +16,14 @@ const gameConfig = {
   // upgradeEfficiency reduces drain by 10% per level.
   fuel: {
     max: 100,
-    drainRate: 0.04,        // base plasma consumed per frame-tick
-    upgradeEfficiency: 0.1, // 10% drain reduction per upgrade level
-    highAltMultiplier: 3,   // drain multiplier above warningThreshold (120m)
-    criticalAltMultiplier: 10, // drain multiplier above criticalThreshold (200m)
+    drainRate: 0.04,           // base plasma consumed per frame-tick
+    upgradeEfficiency: 0.1,    // 10% drain reduction per upgrade level
+    highAltMultiplier: 3,      // drain multiplier above warningThreshold
+    criticalAltMultiplier: 10, // drain multiplier above criticalThreshold
   },
 
-  // ── Speed ──────────────────────────────────────────────────────────────────
-  // Ship speed in m/s (HUD converts to km/h × 3.6).
+  // ── Ship Physics ────────────────────────────────────────────────────────────
+  // Speed in m/s (HUD converts to km/h × 3.6).
   // Diving accelerates toward max, climbing decelerates toward min.
   // drag pulls speed back toward cruise when flying level.
   speed: {
@@ -35,10 +35,8 @@ const gameConfig = {
     gravityImpact: 0.8,     // how much pitch angle affects speed change
     throttleMultiplier: 1.5,// W-key thrust = accelRate × this
     drag: 0.01,             // pull toward cruise speed when level
+    gravity: 0.075,         // base downward force applied every frame (units/tick)
   },
-
-  // Base downward force applied every frame (units/tick)
-  gravity: 0.075,
 
   // ── Ship Controls ──────────────────────────────────────────────────────────
   // Torque values = angular acceleration per input per frame.
@@ -88,7 +86,7 @@ const gameConfig = {
   // chunkSize × renderDist determines visible area. Higher = more terrain, worse perf.
   terrain: {
     chunkSize: 200,         // world-units per terrain tile
-    chunkRes: 64,           // vertex resolution per chunk (64×64 grid)
+    chunkRes: 32,           // vertex resolution per chunk (32×32 grid) — lower = more low-poly, fewer triangles
     renderDist: 3,          // chunks loaded in each direction from player
     baseHeight: -45,        // global height offset (shifts entire terrain down)
     groupYOffset: -50,      // Y position of chunk groups (visual offset)
@@ -102,7 +100,7 @@ const gameConfig = {
     params: {
       FLAT:      { freq: 0.002, amp: 15,  power: 1.0, octaves: 2, ridged: false },
       HILLS:     { freq: 0.004, amp: 45,  power: 1.5, octaves: 3, ridged: false },
-      MOUNTAINS: { freq: 0.006, amp: 110, power: 2.2, octaves: 4, ridged: true  },
+      MOUNTAINS: { freq: 0.006, amp: 110, power: 1.6, octaves: 4, ridged: true  },
       GORGES:    { freq: 0.005, amp: 130, power: 0.6, octaves: 3, ridged: false },
     },
 
@@ -117,8 +115,8 @@ const gameConfig = {
     biomes: {
       firstLength: 500,         // metres before first biome change
       minLength: 1000,          // shortest a biome can be after the first
-      maxExtraLength: 1500,     // random extra length added (total: 1000–5000m)
-      transitionSpeed: 0.005,   // fog/sun color blend speed between biomes
+      maxExtraLength: 1500,     // random extra length added (total: 1000–2500m)
+      transitionSpeed: 0.005,   // fog blend speed between biomes
     },
 
     // Rock clusters scattered on FLAT and HILLS terrain
@@ -149,10 +147,54 @@ const gameConfig = {
 
     // Terrain surface material
     material: {
-      roughness: 0.8,      // matte surface (1.0 = fully rough)
-      metalness: 0.0,       // non-metallic
-      grayscaleMin: 0.3,    // darkest possible terrain shade
-      grayscaleRange: 0.6,  // range above min (0.3–0.9)
+      roughness: 0.8,           // matte surface (1.0 = fully rough)
+      metalness: 0.0,           // non-metallic
+      // Height-based vertex colour gradient — low vertices darker, high vertices brighter.
+      // Normalised per-chunk so every biome gets the same contrast regardless of elevation range.
+      heightGradient:       false, // set true to enable; false = flat biome colour
+      heightGradientDark:   0.25,  // colour multiplier at the lowest vertex in a chunk
+      heightGradientBright: 1.0,   // colour multiplier at the highest vertex in a chunk
+    },
+
+    // ── Canyon terrain ────────────────────────────────────────────────────
+    // The CANYON terrain type carves a navigable gorge through tall walls.
+    // The gorge floor is low and flat; the walls are tall hill-like slopes.
+    // Canyon width and centerline both meander using separate noise instances.
+    canyon: {
+      gorgeDepth: 65,         // how far below baseHeight the floor sits
+      minHalfWidth: 50,       // narrowest gorge half-width (units)
+      maxHalfWidth: 90,       // widest gorge half-width (units)
+      meanderAmplitude: 55,   // max X drift of the centerline from X=0
+      meanderFreq: 0.0007,    // how slowly the centerline wanders (lower = gentler bends)
+      widthFreq: 0.0025,      // noise frequency for width variation along Z
+      wallAmp: 150,           // wall height amplitude
+      floorAmp: 8,            // floor height amplitude (keep low for navigability)
+      wallParams:  { freq: 0.004, power: 1.2, octaves: 3, ridged: false },
+      floorParams: { freq: 0.002, power: 1.0, octaves: 2, ridged: false },
+    },
+
+    // ── Terrain colour ────────────────────────────────────────────────────
+    // Each palette defines the two ends of an allowed colour range.
+    // leftShade = darkest / coolest end, rightShade = lightest / warmest end.
+    // forcePalette: set to a palette name (e.g. "gray") to lock it for testing;
+    // leave null to pick one at random each session.
+    //
+    // The palette range is mapped onto a number line [hop.rangeMin, hop.rangeMax].
+    // On every biome change the shade "hops" by a random signed amount.
+    // If the hop pushes past a boundary it snaps back near the midpoint (± hop.midSnapJitter).
+    color: {
+      forcePalette: null as string | null,
+      palettes: [
+        // { name: 'gray', leftShade: '#b9a2a2', rightShade: '#ecdfdf' },
+        { name: 'mars', leftShade: '#bd421c', rightShade: '#c8623d' },
+      ] as { name: string; leftShade: string; rightShade: string }[],
+      hop: {
+        rangeMin: 0,          // maps to leftShade
+        rangeMax: 10,         // maps to rightShade
+        hopMin: 1,            // smallest hop per biome change
+        hopMax: 4,            // largest hop per biome change
+        midSnapJitter: 1.5,   // random scatter around midpoint when snapping back
+      },
     },
   },
 
@@ -172,8 +214,6 @@ const gameConfig = {
     maxAngleOffset: 1.0472, // max spawn angle offset at hardest difficulty (~60°)
     difficultyRampCount: 20,// collections before difficulty plateaus
     collectPoints: 500,     // score awarded per collection
-
-    // Distance from ship where next recharger spawns
     spawning: {
       firstDistance: 500,   // first recharger is placed close so player sees it
       minDistance: 250,     // closest spawn when fuel is low
@@ -196,6 +236,129 @@ const gameConfig = {
 
   // ── Visuals ────────────────────────────────────────────────────────────────
   visuals: {
+
+    // ── Lighting ──────────────────────────────────────────────────────────────
+    // Primary sun, secondary sun, intensity walk, and preset fill/ambient/hemisphere.
+    lighting: {
+
+      // Primary directional sun — casts shadows, illuminates terrain from above.
+      sun: {
+        position:      [100, 380, -150] as [number, number, number], // 11AM — high overhead, slight east (+X) and south (-Z) lean
+        color:         0xfff5e0,  // warm white — single place to shift the whole scene's sun hue
+        intensity:     0.75,      // base sun brightness (modified by intensityWalk)
+        shadowMapSize: 2048,      // shadow texture resolution (higher = crisper, slower)
+        shadowBounds:  200,       // shadow camera frustum size
+        shadowNear:    0.5,
+        shadowFar:     500,
+      },
+
+      // Secondary sun — orange backlight from behind the typical flight direction.
+      // Hits back faces of terrain features creating warm silhouette edges on
+      // mountains and ridges as the ship flies toward them.
+      secondarySun: {
+        enabled:   true,
+        color:     0xff7733,                                 // orange — tune freely
+        intensity: 0.6,                                      // relative to primary
+        position:  [0, 60, 300] as [number, number, number], // low, directly behind
+      },
+
+      // Sun intensity random walk — drifts between biomes instead of fixed per-biome values.
+      // On each biome change a small hop is applied. If it pushes past a boundary
+      // it snaps back near the midpoint (± midSnapJitter).
+      intensityWalk: {
+        min:          0.45,   // dimmest the sun ever gets
+        max:          1.25,   // brightest the sun ever gets
+        hopMin:       0.05,   // smallest intensity hop per biome change
+        hopMax:       0.15,   // largest intensity hop per biome change
+        midSnapJitter: 0.08,  // scatter around midpoint when snapping back
+      },
+
+      // Switch activePreset to try different fill / ambient / hemisphere moods.
+      // Each preset is a full lighting rig — change one letter to swap the whole mood.
+      activePreset: 'F' as 'A' | 'B' | 'C' | 'D' | 'E' | 'F',
+
+      presets: {
+
+        // A: Deep Space Night — very dark ambient, sun dominates, deep shadows
+        A: {
+          ambientColor:     0x080818,
+          ambientIntensity: 0.05,
+          hemiSkyColor:     0x05060f,
+          hemiGroundColor:  0x020203,
+          hemiIntensity:    0.35,
+          fillColor:        0x1133cc,  // cold blue
+          fillIntensity:    0.22,
+          fillPosition:     [-150, 80, -80] as [number, number, number],
+        },
+
+        // B: Cold Moonlight — pervasive blue-cold cast, medium ambient lifts shadows
+        B: {
+          ambientColor:     0x0d1530,
+          ambientIntensity: 0.15,
+          hemiSkyColor:     0x0a1228,
+          hemiGroundColor:  0x050810,
+          hemiIntensity:    0.55,
+          fillColor:        0x2255dd,  // brighter cold blue
+          fillIntensity:    0.35,
+          fillPosition:     [-150, 100, -80] as [number, number, number],
+        },
+
+        // C: Dusk Glow — neutral white ambient, purple hemisphere, visible and alien
+        C: {
+          ambientColor:     0xffffff,
+          ambientIntensity: 0.60,
+          hemiSkyColor:     0x0f0818,
+          hemiGroundColor:  0x080508,
+          hemiIntensity:    0.5,
+          fillColor:        0xffffff,
+          fillIntensity:    0.9,
+          fillPosition:     [-150, 80, -80] as [number, number, number],
+        },
+
+        // D: Nebula Haze — magenta hemisphere above, warm amber fill from the side
+        D: {
+          ambientColor:     0x100508,
+          ambientIntensity: 0.08,
+          hemiSkyColor:     0x1a0818,
+          hemiGroundColor:  0x0a0604,
+          hemiIntensity:    0.50,
+          fillColor:        0xaa5511,  // warm amber-orange
+          fillIntensity:    0.28,
+          fillPosition:     [-150, 60, -80] as [number, number, number],
+        },
+
+        // E: Teal Void — gas giant cyan light bathes the terrain in alien green
+        E: {
+          ambientColor:     0x051a12,
+          ambientIntensity: 0.12,
+          hemiSkyColor:     0x061a14,
+          hemiGroundColor:  0x030808,
+          hemiIntensity:    0.50,
+          fillColor:        0x11aa77,  // bright teal-green
+          fillIntensity:    0.28,
+          fillPosition:     [-150, 90, -80] as [number, number, number],
+        },
+
+        // F: Ember Horizon — low warm fill like a volcanic field just out of view
+        F: {
+          ambientColor:     0x120805,
+          ambientIntensity: 0.07,
+          hemiSkyColor:     0x0d0606,
+          hemiGroundColor:  0x080404,
+          hemiIntensity:    0.40,
+          fillColor:        0xcc4411,  // deep amber-red
+          fillIntensity:    0.32,
+          fillPosition:     [-150, 30, -80] as [number, number, number], // low angle = horizon glow
+        },
+
+      } as Record<string, {
+        ambientColor: number; ambientIntensity: number;
+        hemiSkyColor: number; hemiGroundColor: number; hemiIntensity: number;
+        fillColor: number; fillIntensity: number; fillPosition: [number, number, number];
+      }>,
+
+    },
+
     // Bloom post-processing — glow effect that intensifies at high speed
     bloom: {
       baseStrength: 0.8,    // bloom at idle
@@ -226,7 +389,7 @@ const gameConfig = {
     speedLines: {
       count: 100,           // number of speed line particles
       size: 0.8,            // dot size
-      respawnDistance: 50,   // reset line if this far from ship
+      respawnDistance: 50,  // reset line if this far from ship
       zCullOffset: 40,      // reset line if this far behind ship
       spreadX: 30,          // horizontal scatter on respawn
       spreadY: 20,          // vertical scatter on respawn
@@ -234,10 +397,17 @@ const gameConfig = {
       maxOpacity: 0.8,      // peak opacity at full motion intensity
     },
 
+    // Ship hull glow when plasma is collected
+    shipGlow: {
+      intensityMultiplier: 2.0, // glow strength = remaining timer × this
+    },
+
+    // ── Sky ───────────────────────────────────────────────────────────────────
+
     // Background starfield — procedural points on a sphere around the camera
     stars: {
-      minCount: 500,       // minimum stars (sparse sky)
-      maxExtraCount: 1500,  // random extra stars (total: 1000–3000)
+      minCount: 500,        // minimum stars (sparse sky)
+      maxExtraCount: 1500,  // random extra stars (total: 500–2000)
       clumpCount: 6,        // number of star cluster focal points
       clumpSpreadMin: 0.3,  // tightest cluster grouping (radians)
       clumpSpreadRange: 0.5,// random extra spread per cluster
@@ -252,11 +422,47 @@ const gameConfig = {
       ],
     },
 
+    // Alien planet atmosphere: horizon glow band, galactic belt, and nebula patches.
+    nightSky: {
+
+      // Cylindrical glow band sitting at the horizon — gives the sky depth and atmosphere.
+      horizonGlow: {
+        color: 0x1a0d3a,        // deep violet
+        opacity: 0.33,          // overall glow brightness (0 = off, 1 = full)
+        radius: 900,            // cylinder radius — should exceed fog render distance
+        height: 300,            // how tall the band is (units); gradient fades top & bottom
+        segments: 48,           // horizontal polygon count — higher = smoother ring
+      },
+
+      // Dense micro-star belt stretched across the sky like a galaxy arm.
+      // Randomly tilted each session so no two runs look the same.
+      galacticBand: {
+        spawnChance: 0.6,         // probability (0–1) the band appears in a given session
+        starCount: 2200,          // number of stars in the band
+        phiSpreadMin: 0.06,       // narrowest possible band (radians) — tight stripe
+        phiSpreadMax: 0.18,       // widest possible band (radians) — broad sweep
+        widthVariation: 0.65,     // how dramatically the width swells/pinches (0 = uniform, 1 = very organic)
+        brightnessVariation: 0.5, // wide sections are brighter, pinch-points dimmer (0 = uniform opacity)
+        radius: 820,              // distance from camera (should be inside star sphere)
+        size: 1.4,                // point size
+        opacity: 0.5,             // base band brightness
+        colors: [0xc8d0ff, 0xffe8d0, 0xe8d0ff], // pastel tints: blue-white / amber-white / lavender
+      },
+
+      // Large soft nebula patches — glowing clouds placed at high elevation angles.
+      nebulae: [
+        { color: 0x6a0dad, opacity: 0.055, azimuth: 0.5,  elevation: 0.70, radius: 240, tiltZ: 0.3 },
+        { color: 0x0d4a6a, opacity: 0.050, azimuth: 2.1,  elevation: 0.80, radius: 190, tiltZ: 0.6 },
+        { color: 0x6a0d3a, opacity: 0.045, azimuth: 3.9,  elevation: 0.65, radius: 210, tiltZ: 0.1 },
+        { color: 0x0d1a6a, opacity: 0.050, azimuth: 5.3,  elevation: 0.75, radius: 170, tiltZ: 0.5 },
+      ],
+    },
+
     // Distant planets/moons — decorative objects on the skybox
     spaceObjects: {
       minCount: 1,          // minimum planets
       maxCount: 3,          // maximum planets
-      minDistance: 1200,     // closest planet distance
+      minDistance: 1200,    // closest planet distance
       distanceRange: 500,   // random extra distance (1200–1700)
       minHeight: 200,       // lowest planet elevation
       heightRange: 600,     // random extra height (200–800)
@@ -266,26 +472,6 @@ const gameConfig = {
       rotationSpeed: 0.002, // max rotation speed per axis per tick
     },
 
-    // Directional sun light and shadow mapping
-    sun: {
-      position: [200, 50, 100] as [number, number, number],
-      intensity: 1.5,
-      shadowMapSize: 2048,  // shadow texture resolution (higher = crisper, slower)
-      shadowBounds: 200,    // shadow camera frustum size
-      shadowNear: 0.5,
-      shadowFar: 500,
-    },
-
-    // Ambient and hemisphere lighting
-    lighting: {
-      hemisphereIntensity: 0.5, // sky-to-ground gradient light
-      ambientIntensity: 0.3,    // flat fill light
-    },
-
-    // Ship hull glow when plasma is collected
-    shipGlow: {
-      intensityMultiplier: 2.0, // glow strength = remaining timer × this
-    },
   },
 
   // ── Crash Sequence ─────────────────────────────────────────────────────────
@@ -301,27 +487,26 @@ const gameConfig = {
   // ── Motion Effects ─────────────────────────────────────────────────────────
   // Screen shake and intensity tracking based on speed changes and maneuvers.
   motion: {
-    warningShakeTimer: 0.4,     // shake duration for "PULL UP" warnings
-    shakeThreshold: 0.4,       // motion intensity needed to trigger speed shake
-    shakeStrengthMultiplier: 10,// camera displacement = timer × this
-    speedChangeDivisor: 5.0,   // normalizes speed delta to 0–1 range
-    pitchMultiplier: 2.0,      // weight of pitch input in motion intensity
-    highSpeedContribution: 0.3,// how much raw high speed adds to intensity
+    warningShakeTimer: 0.4,      // shake duration for "PULL UP" warnings
+    shakeThreshold: 0.4,         // motion intensity needed to trigger speed shake
+    shakeStrengthMultiplier: 10, // camera displacement = timer × this
+    speedChangeDivisor: 5.0,     // normalizes speed delta to 0–1 range
+    pitchMultiplier: 2.0,        // weight of pitch input in motion intensity
+    highSpeedContribution: 0.3,  // how much raw high speed adds to intensity
   },
 
   // ── Timing ─────────────────────────────────────────────────────────────────
   // Frame timing and UI durations.
   timing: {
-    dtClampMax: 0.033,          // max delta time per frame (caps at ~30fps)
-    dtLerpFactor: 0.2,          // delta time smoothing (prevents chunk-gen jitter)
-    statusMessageDuration: 2.0, // seconds "+35 PLASMA" text stays visible
+    dtClampMax: 0.033,           // max delta time per frame (caps at ~30fps)
+    dtLerpFactor: 0.2,           // delta time smoothing (prevents chunk-gen jitter)
+    statusMessageDuration: 2.0,  // seconds "+35 PLASMA" text stays visible
   },
 
   // ── Upgrades ───────────────────────────────────────────────────────────────
   // Shop prices per upgrade level. Index 0 = already unlocked, index 5 = max tier.
   upgrades: {
     costs: [0, 5000, 15000, 30000, 60000, 100000],
-    maxLevel: 5,
   },
 
 };

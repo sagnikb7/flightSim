@@ -7,6 +7,7 @@ import { Upgrades } from './PersistenceService';
 import { TerrainManager } from './TerrainManager';
 import { ShipController } from './ShipController';
 import { PlasmaRechargerManager } from './PlasmaRecharger';
+import { LightingManager } from './LightingManager';
 
 export interface GameStats {
   health: number;
@@ -42,8 +43,9 @@ export class GameEngine {
   private terrain: TerrainManager;
   private ship: ShipController;
   private stars: THREE.Group;
+  private skyExtras: THREE.Group;
   private spaceObjects: THREE.Group = new THREE.Group();
-  private sun: THREE.DirectionalLight;
+  private lighting: LightingManager;
   private plasmaManager: PlasmaRechargerManager;
 
   // Ship glow materials cache for plasma charge effect
@@ -111,28 +113,24 @@ export class GameEngine {
     this.scene.fog = fog;
     this.renderer.setClearColor(0x000002);
 
-    const sunCfg = visuals.sun;
-    this.sun = new THREE.DirectionalLight(0xffffff, sunCfg.intensity);
-    this.sun.position.set(sunCfg.position[0], sunCfg.position[1], sunCfg.position[2]);
-    this.sun.castShadow = true;
-    this.sun.shadow.mapSize.width = sunCfg.shadowMapSize;
-    this.sun.shadow.mapSize.height = sunCfg.shadowMapSize;
-    this.sun.shadow.camera.left = -sunCfg.shadowBounds;
-    this.sun.shadow.camera.right = sunCfg.shadowBounds;
-    this.sun.shadow.camera.top = sunCfg.shadowBounds;
-    this.sun.shadow.camera.bottom = -sunCfg.shadowBounds;
-    this.sun.shadow.camera.near = sunCfg.shadowNear;
-    this.sun.shadow.camera.far = sunCfg.shadowFar;
-    this.scene.add(this.sun);
-
-    // 3. System Managers
-    this.terrain = new TerrainManager(this.scene, fog, this.sun);
+    // 3. Lighting + System Managers
+    this.lighting = new LightingManager(this.scene);
+    this.terrain = new TerrainManager(this.scene, fog, this.lighting.sun);
     this.terrain.onBiomeChange = (name) => this.onBiomeChange?.(name);
 
     this.plasmaManager = new PlasmaRechargerManager(
       this.scene,
       (x, z) => this.terrain.getHeight(x, z)
     );
+
+    // Canyon constraint: when flying through a CANYON biome, rechargers are
+    // snapped to within the gorge so the player must navigate inside to collect.
+    this.plasmaManager.constrainSpawnX = (x, z) => {
+      if (this.terrain.getCurrentTerrainType() !== 'CANYON') return x;
+      const center = this.terrain.getCanyonCenter(z);
+      const hw     = this.terrain.getCanyonHalfWidth(z);
+      return THREE.MathUtils.clamp(x, center - hw * 0.7, center + hw * 0.7);
+    };
 
     this.ship = new ShipController(this.upgrades);
     this.scene.add(this.ship.group);
@@ -145,6 +143,12 @@ export class GameEngine {
     // 5. Background Visuals
     this.stars = this.createStars();
     this.scene.add(this.stars);
+
+    this.skyExtras = new THREE.Group();
+    this.skyExtras.add(this.createHorizonGlow());
+    if (Math.random() < CONFIG.visuals.nightSky.galacticBand.spawnChance) this.skyExtras.add(this.createGalacticBand());
+    this.skyExtras.add(this.createNebulae());
+    this.scene.add(this.skyExtras);
 
     this.createSpaceObjects();
     this.scene.add(this.spaceObjects);
@@ -165,7 +169,6 @@ export class GameEngine {
     this.scene.add(this.particles);
 
     this.clock = new THREE.Clock();
-    this.setupLighting();
 
     // 7. Post-Processing Pipeline
     this.composer = new EffectComposer(this.renderer);
@@ -230,9 +233,9 @@ export class GameEngine {
     }));
 
     const layers = [
-      { size: starsCfg.layers[0].size, color: 0xffffff, ratio: starsCfg.layers[0].ratio },
-      { size: starsCfg.layers[1].size, color: 0xeeeeee, ratio: starsCfg.layers[1].ratio },
-      { size: starsCfg.layers[2].size, color: 0xfafafa, ratio: starsCfg.layers[2].ratio }
+      { size: starsCfg.layers[0].size, color: 0xd0d8ff, ratio: starsCfg.layers[0].ratio }, // cool blue-white
+      { size: starsCfg.layers[1].size, color: 0xffe8d0, ratio: starsCfg.layers[1].ratio }, // warm amber-white
+      { size: starsCfg.layers[2].size, color: 0xe8d0ff, ratio: starsCfg.layers[2].ratio }  // soft lavender
     ];
 
     layers.forEach(layer => {
@@ -279,6 +282,183 @@ export class GameEngine {
   }
 
   /**
+   * Cylindrical horizon glow — a large open-ended ring sitting at the horizon that
+   * bleeds coloured light upward from the terrain, giving an atmospheric alien feel.
+   * Vertex colours encode a quadratic falloff from the horizon toward the top and bottom
+   * edges; with additive blending black == fully transparent so no separate alpha needed.
+   */
+  private createHorizonGlow(): THREE.Mesh {
+    const cfg = CONFIG.visuals.nightSky.horizonGlow;
+    const geo = new THREE.CylinderGeometry(cfg.radius, cfg.radius, cfg.height, cfg.segments, 6, true);
+
+    const positions = geo.attributes.position as THREE.BufferAttribute;
+    const colors = new Float32Array(positions.count * 3);
+    const glowColor = new THREE.Color(cfg.color);
+    const halfH = cfg.height * 0.5;
+
+    for (let i = 0; i < positions.count; i++) {
+      const y = positions.getY(i);
+      // 1 at midpoint (y=0), 0 at top/bottom edges — quadratic falloff
+      const t = 1 - Math.min(Math.abs(y) / halfH, 1);
+      const intensity = t * t;
+      colors[i * 3]     = glowColor.r * intensity;
+      colors[i * 3 + 1] = glowColor.g * intensity;
+      colors[i * 3 + 2] = glowColor.b * intensity;
+    }
+
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: cfg.opacity,
+      blending: THREE.AdditiveBlending,
+      side: THREE.BackSide,
+      depthWrite: false,
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    // Shift down slightly so the bright midpoint sits at eye-level horizon
+    mesh.position.y = -cfg.height * 0.1;
+    return mesh;
+  }
+
+  /**
+   * Dense strip of micro-stars forming a galactic arm visible across the sky.
+   * Stars are distributed in a narrow phi band (equatorial plane) then the entire
+   * group is randomly tilted per session so the band cuts across the sky at a
+   * different angle each run.
+   */
+  private createGalacticBand(): THREE.Points {
+    const cfg = CONFIG.visuals.nightSky.galacticBand;
+    const vertices: number[] = [];
+    const colorValues: number[] = [];
+    const palette = cfg.colors.map((c: number) => new THREE.Color(c));
+
+    // Session-width: pick a base spread anywhere in the configured range
+    const phiSpread = cfg.phiSpreadMin + Math.random() * (cfg.phiSpreadMax - cfg.phiSpreadMin);
+
+    // Three random phase offsets — baked once so the shape is fixed for this session
+    // but different every run. Incommensurate frequencies (2.3 / 5.7 / 11.1) mean
+    // the combined wave never obviously repeats within a 2π sweep.
+    const p1 = Math.random() * Math.PI * 2;
+    const p2 = Math.random() * Math.PI * 2;
+    const p3 = Math.random() * Math.PI * 2;
+
+    // Returns a normalised modulation in [-1, 1] for a given theta
+    const bandMod = (theta: number) =>
+      0.50 * Math.sin(2.3  * theta + p1) +
+      0.30 * Math.sin(5.7  * theta + p2) +
+      0.20 * Math.sin(11.1 * theta + p3);
+
+    for (let i = 0; i < cfg.starCount; i++) {
+      const theta = Math.random() * Math.PI * 2;
+
+      // Local spread swells/pinches around the ring based on the harmonic sum
+      const mod        = bandMod(theta);                          // -1 → +1
+      const localSpread = phiSpread * (1 + cfg.widthVariation * mod);
+
+      const phi = Math.PI / 2 + (Math.random() - 0.5) * Math.max(localSpread, 0.005);
+      const r   = cfg.radius + (Math.random() - 0.5) * 60;
+
+      vertices.push(
+        r * Math.sin(phi) * Math.cos(theta),
+        r * Math.cos(phi),
+        r * Math.sin(phi) * Math.sin(theta)
+      );
+
+      // Wider sections feel denser/brighter: scale the colour by the same modulation
+      const brightness = 1 + cfg.brightnessVariation * mod;   // ~0.5 → 1.5
+      const c = palette[Math.floor(Math.random() * palette.length)];
+      colorValues.push(
+        Math.min(c.r * brightness, 1),
+        Math.min(c.g * brightness, 1),
+        Math.min(c.b * brightness, 1)
+      );
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geo.setAttribute('color',    new THREE.Float32BufferAttribute(colorValues, 3));
+
+    const mat = new THREE.PointsMaterial({
+      vertexColors: true,
+      size: cfg.size,
+      transparent: true,
+      opacity: cfg.opacity,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+
+    const points = new THREE.Points(geo, mat);
+    // Random tilt — different galactic orientation every session
+    points.rotation.x = Math.random() * Math.PI * 2;
+    points.rotation.z = Math.random() * Math.PI;
+    return points;
+  }
+
+  /**
+   * Soft nebula cloud patches at high elevation angles.
+   * Each patch is a PlaneGeometry textured with a canvas-baked radial gradient,
+   * placed on an imaginary sky sphere and oriented to face the scene centre.
+   * Additive blending means overlapping patches brighten naturally without seams.
+   */
+  private createNebulae(): THREE.Group {
+    const group = new THREE.Group();
+    const patches = CONFIG.visuals.nightSky.nebulae;
+    const skyDist = 750;
+
+    patches.forEach((patch: { color: number; opacity: number; azimuth: number; elevation: number; radius: number; tiltZ: number }) => {
+      // Bake a soft radial gradient into a canvas texture
+      const size = 256;
+      const canvas = document.createElement('canvas');
+      canvas.width  = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      const c   = new THREE.Color(patch.color);
+      const r   = Math.round(c.r * 255);
+      const g   = Math.round(c.g * 255);
+      const b   = Math.round(c.b * 255);
+
+      const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      grad.addColorStop(0,    `rgba(${r},${g},${b},0.9)`);
+      grad.addColorStop(0.35, `rgba(${r},${g},${b},0.45)`);
+      grad.addColorStop(0.70, `rgba(${r},${g},${b},0.12)`);
+      grad.addColorStop(1,    `rgba(0,0,0,0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, size, size);
+
+      const texture = new THREE.CanvasTexture(canvas);
+
+      const geo = new THREE.PlaneGeometry(patch.radius * 2, patch.radius * 2);
+      const mat = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: patch.opacity,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+
+      const mesh = new THREE.Mesh(geo, mat);
+
+      // Spherical placement: azimuth (horizontal) + elevation (vertical angle above horizon)
+      const px = skyDist * Math.cos(patch.elevation) * Math.cos(patch.azimuth);
+      const py = skyDist * Math.sin(patch.elevation);
+      const pz = skyDist * Math.cos(patch.elevation) * Math.sin(patch.azimuth);
+      mesh.position.set(px, py, pz);
+      mesh.lookAt(0, 0, 0);
+      // Small in-plane twist for organic irregularity
+      mesh.rotateZ(patch.tiltZ);
+
+      group.add(mesh);
+    });
+
+    return group;
+  }
+
+  /**
    * Spawns random "planets" or space debris at extreme distances
    * to provide a sense of scale and background depth.
    */
@@ -318,13 +498,6 @@ export class GameEngine {
 
         this.spaceObjects.add(planet);
     }
-  }
-
-  private setupLighting() {
-    const { lighting } = CONFIG.visuals;
-    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x5a4a3a, lighting.hemisphereIntensity);
-    this.scene.add(hemiLight);
-    this.scene.add(new THREE.AmbientLight(0xffffff, lighting.ambientIntensity));
   }
 
   /**
@@ -570,7 +743,7 @@ export class GameEngine {
         const motionIntensity = this.ship.motionIntensity;
 
         // Dynamic camera shake based on speed/turn intensity
-        const shakeSpeedThreshold = (speed.cruise + speed.max) / 2.25;
+        const shakeSpeedThreshold = (speed.cruise + speed.max) / 2;
         if (motionIntensity > motionCfg.shakeThreshold && this.shakeTimer < 0.2 && this.ship.currentSpeed > shakeSpeedThreshold) {
           this.shakeTimer = Math.max(this.shakeTimer, motionIntensity * 0.5);
         }
@@ -637,6 +810,7 @@ export class GameEngine {
 
     // Lock background objects to camera/ship to simulate infinite space
     this.stars.position.copy(this.camera.position);
+    this.skyExtras.position.copy(this.camera.position);
     this.spaceObjects.position.copy(this.camera.position);
     this.speedLines.position.copy(this.ship.group.position);
 

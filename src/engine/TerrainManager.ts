@@ -29,12 +29,6 @@ import { CONFIG, BIOMES } from './constants';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Random grayscale THREE.Color in the range [grayscaleMin, grayscaleMin + grayscaleRange]. */
-function randomGrayscale(): THREE.Color {
-  const { grayscaleMin, grayscaleRange } = CONFIG.terrain.material;
-  const v = grayscaleMin + Math.random() * grayscaleRange;
-  return new THREE.Color(v, v, v);
-}
 
 /**
  * Deterministic pseudo-random from an integer seed.
@@ -69,6 +63,10 @@ interface Crater {
 export class TerrainManager {
   // Simplex noise instance — shared across all height queries
   private noise2D = createNoise2D();
+
+  // Separate noise instance for canyon geometry (centerline + width) so canyon
+  // shape is independent of terrain surface noise.
+  private noise2DCanyon = createNoise2D();
 
   // Active chunks keyed by "cx,cz" string
   private chunks: Map<string, THREE.Group> = new Map();
@@ -108,8 +106,16 @@ export class TerrainManager {
   private fog: THREE.FogExp2;
   private sun: THREE.DirectionalLight;
 
-  // Current terrain tint — randomised each biome change
+  // Current terrain tint — updated on each biome change via the hop system
   private currentBiomeColor: THREE.Color;
+
+  // Active colour palette and current position on its [rangeMin, rangeMax] number line
+  private activePalette: { name: string; leftShade: string; rightShade: string };
+  private shadePosition: number;
+
+  // Sun intensity random walk — current is the lerp "from", target is the lerp "to"
+  private currentSunIntensity: number;
+  private targetSunIntensity: number;
 
   /** Fired when the player crosses into a new biome. GameEngine uses this to show the zone name. */
   public onBiomeChange?: (name: string) => void;
@@ -123,12 +129,29 @@ export class TerrainManager {
     // Apply the starting biome's visuals immediately
     const startBiome = BIOMES[this.biomeOffset % BIOMES.length];
     this.fog.color.set(startBiome.fog);
-    this.sun.color.set(startBiome.sunColor);
-    this.sun.intensity = startBiome.sunIntensity;
+    // Sun colour is fixed in gameConfig (visuals.sun.color) — not per-biome
+    // Sun intensity is managed by the random walk — initialised below
 
-    this.currentBiomeColor = randomGrayscale();
+    // Pick the active palette (forced or random) and set the initial shade position
+    const { palettes, forcePalette } = CONFIG.terrain.color;
+    this.activePalette = forcePalette
+      ? (palettes.find((p) => p.name === forcePalette) ?? palettes[Math.floor(Math.random() * palettes.length)])
+      : palettes[Math.floor(Math.random() * palettes.length)];
+
+    const { rangeMin, rangeMax } = CONFIG.terrain.color.hop;
+    this.shadePosition  = rangeMin + Math.random() * (rangeMax - rangeMin);
+    this.currentBiomeColor = this.shadeToColor(this.shadePosition);
+
+    // Pick a random starting sun intensity within the allowed walk range
+    const siw = CONFIG.visuals.lighting.intensityWalk;
+    const startIntensity = siw.min + Math.random() * (siw.max - siw.min);
+    this.currentSunIntensity = startIntensity;
+    this.targetSunIntensity  = startIntensity;
+    this.sun.intensity = startIntensity;
+
     this.terrainMaterial = new THREE.MeshStandardMaterial({
-      color: this.currentBiomeColor,
+      vertexColors: true,
+      color: 0xffffff,  // neutral tint — vertex colours drive everything
       flatShading: true,
       roughness: CONFIG.terrain.material.roughness,
       metalness: CONFIG.terrain.material.metalness,
@@ -169,22 +192,80 @@ export class TerrainManager {
     const b1 = this.biomeAt(idx);
     const b2 = this.biomeAt(idx + 1);
 
-    const p1 = CONFIG.terrain.params[b1.terrainType];
-    const p2 = CONFIG.terrain.params[b2.terrainType];
+    // Each biome slot contributes a height sample; CANYON uses its own formula
+    const h1 = this.sampleBiomeHeight(x, z, b1.terrainType);
+    const h2 = this.sampleBiomeHeight(x, z, b2.terrainType);
 
-    // Sample noise for both biomes, apply power curve, then blend
-    const n1 = Math.pow(this.sampleFBM(x, z, p1.freq, p1.octaves, p1.ridged), p1.power);
-    const n2 = Math.pow(this.sampleFBM(x, z, p2.freq, p2.octaves, p2.ridged), p2.power);
-
-    const blendedNoise = THREE.MathUtils.lerp(n1, n2, transition);
-    const blendedAmp   = THREE.MathUtils.lerp(p1.amp, p2.amp, transition);
-
-    let height = blendedNoise * blendedAmp + CONFIG.terrain.baseHeight;
-
-    // Subtract crater depressions (check this chunk and its 8 neighbors)
+    let height = THREE.MathUtils.lerp(h1, h2, transition);
     height -= this.getCraterDepression(x, z);
-
     return height;
+  }
+
+  /** Returns the terrain height contribution for a single biome type at (x, z). */
+  private sampleBiomeHeight(x: number, z: number, terrainType: string): number {
+    if (terrainType === 'CANYON') return this.sampleCanyonHeight(x, z);
+    const p = CONFIG.terrain.params[terrainType as 'FLAT' | 'HILLS' | 'MOUNTAINS' | 'GORGES'];
+    const n = Math.pow(this.sampleFBM(x, z, p.freq, p.octaves, p.ridged), p.power);
+    return n * p.amp + CONFIG.terrain.baseHeight;
+  }
+
+  /**
+   * Canyon height formula: a floor-to-wall lerp driven by distance from the
+   * meandering centerline. The canyon widens and narrows along Z via noise.
+   */
+  private sampleCanyonHeight(x: number, z: number): number {
+    const cfg = CONFIG.terrain.canyon;
+    const center    = this.getCanyonCenter(z);
+    const halfWidth = this.getCanyonHalfWidth(z);
+
+    // Normalized distance from centerline: 0 = inside gorge, 1 = canyon rim and beyond
+    const d = Math.abs(x - center);
+    const t = this.smoothstep(0, halfWidth, d);
+
+    const wp = cfg.wallParams;
+    const fp = cfg.floorParams;
+
+    const wallNoise  = Math.pow(this.sampleFBM(x, z, wp.freq, wp.octaves, wp.ridged), wp.power);
+    const floorNoise = Math.pow(this.sampleFBM(x, z, fp.freq, fp.octaves, fp.ridged), fp.power);
+
+    const wallH  = wallNoise  * cfg.wallAmp  + CONFIG.terrain.baseHeight;
+    const floorH = floorNoise * cfg.floorAmp + CONFIG.terrain.baseHeight - cfg.gorgeDepth;
+
+    return THREE.MathUtils.lerp(floorH, wallH, t);
+  }
+
+  // ── Canyon public API ─────────────────────────────────────────────────────
+
+  /**
+   * X coordinate of the canyon centerline at world Z.
+   * Drifts slowly using low-frequency noise so the gorge gently meanders.
+   */
+  public getCanyonCenter(z: number): number {
+    const cfg = CONFIG.terrain.canyon;
+    return this.noise2DCanyon(z * cfg.meanderFreq, 0) * cfg.meanderAmplitude;
+  }
+
+  /**
+   * Half-width of the navigable gorge at world Z.
+   * Varies between minHalfWidth and maxHalfWidth using a separate noise band.
+   */
+  public getCanyonHalfWidth(z: number): number {
+    const cfg = CONFIG.terrain.canyon;
+    const n = (this.noise2DCanyon(0, z * cfg.widthFreq) + 1) * 0.5; // → [0, 1]
+    return cfg.minHalfWidth + n * (cfg.maxHalfWidth - cfg.minHalfWidth);
+  }
+
+  /** Returns the terrain type of the currently active biome. */
+  public getCurrentTerrainType(): string {
+    return this.biomeAt(this.currentBiomeIndex).terrainType;
+  }
+
+  // ── Math helpers ──────────────────────────────────────────────────────────
+
+  /** Smooth Hermite interpolation — equivalent to GLSL smoothstep(edge0, edge1, x). */
+  private smoothstep(edge0: number, edge1: number, x: number): number {
+    const t = THREE.MathUtils.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+    return t * t * (3 - 2 * t);
   }
 
   // ── Chunk lifecycle ──────────────────────────────────────────────────────
@@ -267,7 +348,7 @@ export class TerrainManager {
     const geo = new THREE.PlaneGeometry(chunkSize, chunkSize, chunkRes, chunkRes);
     geo.rotateX(-Math.PI / 2); // lay flat on the XZ plane
 
-    // Displace each vertex vertically using getHeight()
+    // Pass 1 — displace each vertex vertically using getHeight()
     const pos = geo.attributes.position;
     for (let row = 0; row <= chunkRes; row++) {
       for (let col = 0; col <= chunkRes; col++) {
@@ -278,7 +359,44 @@ export class TerrainManager {
     }
     geo.computeVertexNormals();
 
-    this.terrainMaterial.color.copy(this.currentBiomeColor);
+    // Pass 2 — vertex colours: lerp between dark and bright variants of the biome
+    // colour based on each vertex's normalised height within this chunk.
+    // Disabled when heightGradient is false — falls back to flat biome colour.
+    const { heightGradient, heightGradientDark, heightGradientBright } = CONFIG.terrain.material;
+    const vertexCount = pos.count;
+    const colorData   = new Float32Array(vertexCount * 3);
+
+    if (heightGradient) {
+      let minY = Infinity, maxY = -Infinity;
+      for (let i = 0; i < vertexCount; i++) {
+        const y = pos.getY(i);
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+      const yRange = maxY - minY || 1;
+
+      const darkColor   = this.currentBiomeColor.clone().multiplyScalar(heightGradientDark);
+      const brightColor = this.currentBiomeColor.clone().multiplyScalar(heightGradientBright);
+      const tempColor   = new THREE.Color();
+
+      for (let i = 0; i < vertexCount; i++) {
+        const t = (pos.getY(i) - minY) / yRange;
+        tempColor.copy(darkColor).lerp(brightColor, t);
+        colorData[i * 3]     = tempColor.r;
+        colorData[i * 3 + 1] = tempColor.g;
+        colorData[i * 3 + 2] = tempColor.b;
+      }
+    } else {
+      // Flat biome colour — fill every vertex with the same colour
+      for (let i = 0; i < vertexCount; i++) {
+        colorData[i * 3]     = this.currentBiomeColor.r;
+        colorData[i * 3 + 1] = this.currentBiomeColor.g;
+        colorData[i * 3 + 2] = this.currentBiomeColor.b;
+      }
+    }
+
+    geo.setAttribute('color', new THREE.BufferAttribute(colorData, 3));
+
     const mesh = new THREE.Mesh(geo, this.terrainMaterial);
     mesh.receiveShadow = true;
     return mesh;
@@ -319,26 +437,35 @@ export class TerrainManager {
     // Scatter within the cluster
     const localX = clusterX + (Math.random() - 0.5) * rocks.offsetRange;
     const localZ = clusterZ + (Math.random() - 0.5) * rocks.offsetRange;
-    const worldY = this.getHeight(chunkCenterX + localX, chunkCenterZ + localZ);
+
+    // Snap to the terrain vertex grid so the height query hits the same position
+    // that buildTerrainMesh uses. The mesh interpolates linearly between vertices,
+    // so querying at an off-grid point on steep/ridged terrain can return a height
+    // above the rendered surface — causing rocks to visually float.
+    // Global vertex grid = multiples of (chunkSize / chunkRes).
+    const step = CONFIG.terrain.chunkSize / CONFIG.terrain.chunkRes;
+    const snapWX = Math.round((chunkCenterX + localX) / step) * step;
+    const snapWZ = Math.round((chunkCenterZ + localZ) / step) * step;
+    const worldY = this.getHeight(snapWX, snapWZ);
 
     const scale = randFloat(rocks.minScale, rocks.maxScale);
     const geometry = new THREE.DodecahedronGeometry(scale, 0);
 
-    // Tint rocks slightly brighter than the terrain surface
-    const terrainGray = this.currentBiomeColor.r; // grayscale → r = g = b
+    // Tint rocks slightly brighter than the terrain — preserve hue, shift lightness
+    const rockColor = this.currentBiomeColor.clone();
     const brightnessOffset = randFloat(rocks.colorOffset[0], rocks.colorOffset[1]);
     const variation = (Math.random() - 0.5) * rocks.colorVariation;
-    const gray = THREE.MathUtils.clamp(terrainGray + brightnessOffset + variation, 0, 1);
+    rockColor.offsetHSL(0, 0, brightnessOffset + variation);
 
     const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(gray, gray, gray),
+      color: rockColor,
       flatShading: true,
       roughness: rocks.roughness,
       metalness: rocks.metalness,
     });
 
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(localX, worldY + scale * 0.5, localZ);
+    mesh.position.set(snapWX - chunkCenterX, worldY + scale * 0.5, snapWZ - chunkCenterZ);
     mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -513,6 +640,57 @@ export class TerrainManager {
   }
 
   /**
+   * Convert a position on the [rangeMin, rangeMax] number line to a THREE.Color
+   * by lerping between the active palette's leftShade and rightShade.
+   */
+  private shadeToColor(position: number): THREE.Color {
+    const { rangeMin, rangeMax } = CONFIG.terrain.color.hop;
+    const t = THREE.MathUtils.clamp((position - rangeMin) / (rangeMax - rangeMin), 0, 1);
+    return new THREE.Color(this.activePalette.leftShade).lerp(
+      new THREE.Color(this.activePalette.rightShade), t
+    );
+  }
+
+  /**
+   * Apply a random signed hop to the current shade position on each biome change.
+   * If the hop pushes past either boundary, snap the position back near the midpoint
+   * so the shade never gets stuck at an extreme.
+   */
+  private hopShade() {
+    const { rangeMin, rangeMax, hopMin, hopMax, midSnapJitter } = CONFIG.terrain.color.hop;
+    const mid     = (rangeMin + rangeMax) / 2;
+    const hopMag  = hopMin + Math.random() * (hopMax - hopMin);
+    const hopDir  = Math.random() < 0.5 ? 1 : -1;
+
+    this.shadePosition += hopDir * hopMag;
+
+    if (this.shadePosition <= rangeMin || this.shadePosition >= rangeMax) {
+      this.shadePosition = mid + (Math.random() - 0.5) * 2 * midSnapJitter;
+    }
+
+    this.currentBiomeColor = this.shadeToColor(this.shadePosition);
+  }
+
+  /**
+   * Apply a small random hop to the sun intensity on each biome change.
+   * Captures the live sun intensity as the "from" value so mid-transition
+   * crossings lerp smoothly from wherever the sun actually is.
+   */
+  private hopSunIntensity() {
+    const { min, max, hopMin, hopMax, midSnapJitter } = CONFIG.visuals.lighting.intensityWalk;
+    const mid    = (min + max) / 2;
+    const hopMag = hopMin + Math.random() * (hopMax - hopMin);
+    const hopDir = Math.random() < 0.5 ? 1 : -1;
+
+    this.currentSunIntensity = this.sun.intensity; // freeze current as "from"
+    this.targetSunIntensity  = this.currentSunIntensity + hopDir * hopMag;
+
+    if (this.targetSunIntensity <= min || this.targetSunIntensity >= max) {
+      this.targetSunIntensity = mid + (Math.random() - 0.5) * 2 * midSnapJitter;
+    }
+  }
+
+  /**
    * Smoothly blend fog color, sun color, and sun intensity when the player
    * enters a new biome segment. Called once per frame.
    */
@@ -523,7 +701,8 @@ export class TerrainManager {
     if (targetIdx !== this.nextBiomeIndex) {
       this.nextBiomeIndex = targetIdx;
       this.biomeTransition = 0;
-      this.currentBiomeColor = randomGrayscale();
+      this.hopShade();
+      this.hopSunIntensity();
       this.onBiomeChange?.(this.biomeAt(this.nextBiomeIndex).name);
     }
 
@@ -535,8 +714,7 @@ export class TerrainManager {
       const to   = this.biomeAt(this.nextBiomeIndex);
 
       this.fog.color.lerpColors(new THREE.Color(from.fog), new THREE.Color(to.fog), this.biomeTransition);
-      this.sun.color.lerpColors(new THREE.Color(from.sunColor), new THREE.Color(to.sunColor), this.biomeTransition);
-      this.sun.intensity = THREE.MathUtils.lerp(from.sunIntensity, to.sunIntensity, this.biomeTransition);
+      this.sun.intensity = THREE.MathUtils.lerp(this.currentSunIntensity, this.targetSunIntensity, this.biomeTransition);
 
       if (this.biomeTransition >= 1) {
         this.currentBiomeIndex = this.nextBiomeIndex;

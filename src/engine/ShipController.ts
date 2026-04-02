@@ -34,7 +34,8 @@ export class ShipController {
   }
 
   public update(dtScale: number = 1) {
-    const { speed, shipControls, shipGlow, gravity } = CONFIG;
+    const { speed, shipControls, shipGlow } = CONFIG;
+    const { gravity } = speed;
 
     // Pitch: W (pull up) = -1, S (push down) = 1
     const pIn = (this.keys.w || this.keys.ArrowUp) ? -1 : (this.keys.s || this.keys.ArrowDown) ? 1 : 0;
