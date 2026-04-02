@@ -1,8 +1,11 @@
-// ─── Game Configuration ─────────────────────────────────────────────────────
-// Tweak these values to tune gameplay, visuals, and physics.
-// Grouped by system — each section has a brief explanation of what the params control.
+// ─── Master Config ───────────────────────────────────────────────────────────
+// Top-level gameplay configuration. Complex module configs are imported from
+// ModuleConfigs/ and merged in — edit those files to tune terrain or lighting.
 
-const gameConfig = {
+import lightConfig   from './ModuleConfigs/lightConfig';
+import terrainConfig from './ModuleConfigs/terrainConfig';
+
+const masterConfig = {
 
   // ── Health ──────────────────────────────────────────────────────────────────
   // Ship hull points. upgradeBonus is added per upgrade level (max 5 levels).
@@ -82,121 +85,8 @@ const gameConfig = {
   },
 
   // ── Terrain ────────────────────────────────────────────────────────────────
-  // Procedural infinite terrain using simplex noise.
-  // chunkSize × renderDist determines visible area. Higher = more terrain, worse perf.
-  terrain: {
-    chunkSize: 200,         // world-units per terrain tile
-    chunkRes: 32,           // vertex resolution per chunk (32×32 grid) — lower = more low-poly, fewer triangles
-    renderDist: 3,          // chunks loaded in each direction from player
-    baseHeight: -45,        // global height offset (shifts entire terrain down)
-    groupYOffset: -50,      // Y position of chunk groups (visual offset)
-
-    // Terrain type noise parameters — each biome type uses different settings.
-    // freq: noise frequency (lower = broader features)
-    // amp: height multiplier (higher = taller terrain)
-    // power: exponent applied to noise (>1 = sharper peaks, <1 = flattened valleys)
-    // octaves: noise layers (more = finer detail, costs performance)
-    // ridged: true = sharp mountain ridges instead of smooth hills
-    params: {
-      FLAT:      { freq: 0.002, amp: 15,  power: 1.0, octaves: 2, ridged: false },
-      HILLS:     { freq: 0.004, amp: 45,  power: 1.5, octaves: 3, ridged: false },
-      MOUNTAINS: { freq: 0.006, amp: 110, power: 1.6, octaves: 4, ridged: true  },
-      GORGES:    { freq: 0.005, amp: 130, power: 0.6, octaves: 3, ridged: false },
-    },
-
-    // FBM noise stacking — each octave gets smaller amplitude and higher frequency
-    noise: {
-      amplitudeDecay: 0.5,      // each octave's amplitude = previous × this
-      frequencyMultiplier: 2.1, // each octave's frequency = previous × this
-    },
-
-    // Biome length controls how far you fly before the terrain type changes.
-    // First biome is short so new players see a transition early.
-    biomes: {
-      firstLength: 500,         // metres before first biome change
-      minLength: 1000,          // shortest a biome can be after the first
-      maxExtraLength: 1500,     // random extra length added (total: 1000–2500m)
-      transitionSpeed: 0.005,   // fog blend speed between biomes
-    },
-
-    // Rock clusters scattered on FLAT and HILLS terrain
-    rocks: {
-      minClusters: 2,       // min rock clusters per chunk
-      maxClusters: 5,       // max rock clusters per chunk
-      minPerCluster: 3,     // min rocks in a cluster
-      maxPerCluster: 7,     // max rocks in a cluster
-      clusterSpread: 0.8,   // fraction of chunk used for cluster placement
-      offsetRange: 15,      // scatter radius within a cluster (units)
-      minScale: 0.8,        // smallest rock size
-      maxScale: 3.0,        // largest rock size
-      roughness: 0.9,       // rock material roughness
-      metalness: 0.1,       // rock material metalness
-      colorOffset: [0.05, 0.1] as [number, number], // rocks are 5–10% brighter than terrain
-      colorVariation: 0.03, // per-rock brightness jitter (±1.5%)
-    },
-
-    // Impact craters on FLAT biomes only (deterministic per chunk)
-    craters: {
-      chance: 0.3,          // 30% of flat chunks get craters
-      minRadius: 20,        // smallest crater (units)
-      maxRadius: 60,        // largest crater (units)
-      minDepth: 8,          // shallowest crater depression
-      maxDepth: 20,         // deepest crater depression
-      placementArea: 0.6,   // fraction of chunk where craters can spawn
-    },
-
-    // Terrain surface material
-    material: {
-      roughness: 0.8,           // matte surface (1.0 = fully rough)
-      metalness: 0.0,           // non-metallic
-      // Height-based vertex colour gradient — low vertices darker, high vertices brighter.
-      // Normalised per-chunk so every biome gets the same contrast regardless of elevation range.
-      heightGradient:       false, // set true to enable; false = flat biome colour
-      heightGradientDark:   0.25,  // colour multiplier at the lowest vertex in a chunk
-      heightGradientBright: 1.0,   // colour multiplier at the highest vertex in a chunk
-    },
-
-    // ── Canyon terrain ────────────────────────────────────────────────────
-    // The CANYON terrain type carves a navigable gorge through tall walls.
-    // The gorge floor is low and flat; the walls are tall hill-like slopes.
-    // Canyon width and centerline both meander using separate noise instances.
-    canyon: {
-      gorgeDepth: 65,         // how far below baseHeight the floor sits
-      minHalfWidth: 50,       // narrowest gorge half-width (units)
-      maxHalfWidth: 90,       // widest gorge half-width (units)
-      meanderAmplitude: 55,   // max X drift of the centerline from X=0
-      meanderFreq: 0.0007,    // how slowly the centerline wanders (lower = gentler bends)
-      widthFreq: 0.0025,      // noise frequency for width variation along Z
-      wallAmp: 150,           // wall height amplitude
-      floorAmp: 8,            // floor height amplitude (keep low for navigability)
-      wallParams:  { freq: 0.004, power: 1.2, octaves: 3, ridged: false },
-      floorParams: { freq: 0.002, power: 1.0, octaves: 2, ridged: false },
-    },
-
-    // ── Terrain colour ────────────────────────────────────────────────────
-    // Each palette defines the two ends of an allowed colour range.
-    // leftShade = darkest / coolest end, rightShade = lightest / warmest end.
-    // forcePalette: set to a palette name (e.g. "gray") to lock it for testing;
-    // leave null to pick one at random each session.
-    //
-    // The palette range is mapped onto a number line [hop.rangeMin, hop.rangeMax].
-    // On every biome change the shade "hops" by a random signed amount.
-    // If the hop pushes past a boundary it snaps back near the midpoint (± hop.midSnapJitter).
-    color: {
-      forcePalette: null as string | null,
-      palettes: [
-        // { name: 'gray', leftShade: '#b9a2a2', rightShade: '#ecdfdf' },
-        { name: 'mars', leftShade: '#bd421c', rightShade: '#c8623d' },
-      ] as { name: string; leftShade: string; rightShade: string }[],
-      hop: {
-        rangeMin: 0,          // maps to leftShade
-        rangeMax: 10,         // maps to rightShade
-        hopMin: 1,            // smallest hop per biome change
-        hopMax: 4,            // largest hop per biome change
-        midSnapJitter: 1.5,   // random scatter around midpoint when snapping back
-      },
-    },
-  },
+  // Defined in ModuleConfigs/terrainConfig.ts — edit there to tune noise, biomes, canyon, colours.
+  terrain: terrainConfig,
 
   // ── Plasma Recharger ───────────────────────────────────────────────────────
   // Beam stations that spawn ahead of the ship. Fly through the beam to refuel.
@@ -238,126 +128,8 @@ const gameConfig = {
   visuals: {
 
     // ── Lighting ──────────────────────────────────────────────────────────────
-    // Primary sun, secondary sun, intensity walk, and preset fill/ambient/hemisphere.
-    lighting: {
-
-      // Primary directional sun — casts shadows, illuminates terrain from above.
-      sun: {
-        position:      [100, 380, -150] as [number, number, number], // 11AM — high overhead, slight east (+X) and south (-Z) lean
-        color:         0xfff5e0,  // warm white — single place to shift the whole scene's sun hue
-        intensity:     0.75,      // base sun brightness (modified by intensityWalk)
-        shadowMapSize: 2048,      // shadow texture resolution (higher = crisper, slower)
-        shadowBounds:  200,       // shadow camera frustum size
-        shadowNear:    0.5,
-        shadowFar:     500,
-      },
-
-      // Secondary sun — orange backlight from behind the typical flight direction.
-      // Hits back faces of terrain features creating warm silhouette edges on
-      // mountains and ridges as the ship flies toward them.
-      secondarySun: {
-        enabled:   true,
-        color:     0xff7733,                                 // orange — tune freely
-        intensity: 0.6,                                      // relative to primary
-        position:  [0, 60, 300] as [number, number, number], // low, directly behind
-      },
-
-      // Sun intensity random walk — drifts between biomes instead of fixed per-biome values.
-      // On each biome change a small hop is applied. If it pushes past a boundary
-      // it snaps back near the midpoint (± midSnapJitter).
-      intensityWalk: {
-        min:          0.45,   // dimmest the sun ever gets
-        max:          1.25,   // brightest the sun ever gets
-        hopMin:       0.05,   // smallest intensity hop per biome change
-        hopMax:       0.15,   // largest intensity hop per biome change
-        midSnapJitter: 0.08,  // scatter around midpoint when snapping back
-      },
-
-      // Switch activePreset to try different fill / ambient / hemisphere moods.
-      // Each preset is a full lighting rig — change one letter to swap the whole mood.
-      activePreset: 'F' as 'A' | 'B' | 'C' | 'D' | 'E' | 'F',
-
-      presets: {
-
-        // A: Deep Space Night — very dark ambient, sun dominates, deep shadows
-        A: {
-          ambientColor:     0x080818,
-          ambientIntensity: 0.05,
-          hemiSkyColor:     0x05060f,
-          hemiGroundColor:  0x020203,
-          hemiIntensity:    0.35,
-          fillColor:        0x1133cc,  // cold blue
-          fillIntensity:    0.22,
-          fillPosition:     [-150, 80, -80] as [number, number, number],
-        },
-
-        // B: Cold Moonlight — pervasive blue-cold cast, medium ambient lifts shadows
-        B: {
-          ambientColor:     0x0d1530,
-          ambientIntensity: 0.15,
-          hemiSkyColor:     0x0a1228,
-          hemiGroundColor:  0x050810,
-          hemiIntensity:    0.55,
-          fillColor:        0x2255dd,  // brighter cold blue
-          fillIntensity:    0.35,
-          fillPosition:     [-150, 100, -80] as [number, number, number],
-        },
-
-        // C: Dusk Glow — neutral white ambient, purple hemisphere, visible and alien
-        C: {
-          ambientColor:     0xffffff,
-          ambientIntensity: 0.60,
-          hemiSkyColor:     0x0f0818,
-          hemiGroundColor:  0x080508,
-          hemiIntensity:    0.5,
-          fillColor:        0xffffff,
-          fillIntensity:    0.9,
-          fillPosition:     [-150, 80, -80] as [number, number, number],
-        },
-
-        // D: Nebula Haze — magenta hemisphere above, warm amber fill from the side
-        D: {
-          ambientColor:     0x100508,
-          ambientIntensity: 0.08,
-          hemiSkyColor:     0x1a0818,
-          hemiGroundColor:  0x0a0604,
-          hemiIntensity:    0.50,
-          fillColor:        0xaa5511,  // warm amber-orange
-          fillIntensity:    0.28,
-          fillPosition:     [-150, 60, -80] as [number, number, number],
-        },
-
-        // E: Teal Void — gas giant cyan light bathes the terrain in alien green
-        E: {
-          ambientColor:     0x051a12,
-          ambientIntensity: 0.12,
-          hemiSkyColor:     0x061a14,
-          hemiGroundColor:  0x030808,
-          hemiIntensity:    0.50,
-          fillColor:        0x11aa77,  // bright teal-green
-          fillIntensity:    0.28,
-          fillPosition:     [-150, 90, -80] as [number, number, number],
-        },
-
-        // F: Ember Horizon — low warm fill like a volcanic field just out of view
-        F: {
-          ambientColor:     0x120805,
-          ambientIntensity: 0.07,
-          hemiSkyColor:     0x0d0606,
-          hemiGroundColor:  0x080404,
-          hemiIntensity:    0.40,
-          fillColor:        0xcc4411,  // deep amber-red
-          fillIntensity:    0.32,
-          fillPosition:     [-150, 30, -80] as [number, number, number], // low angle = horizon glow
-        },
-
-      } as Record<string, {
-        ambientColor: number; ambientIntensity: number;
-        hemiSkyColor: number; hemiGroundColor: number; hemiIntensity: number;
-        fillColor: number; fillIntensity: number; fillPosition: [number, number, number];
-      }>,
-
-    },
+    // Defined in ModuleConfigs/lightConfig.ts — edit there to tune sun, presets, intensity walk.
+    lighting: lightConfig,
 
     // Bloom post-processing — glow effect that intensifies at high speed
     bloom: {
@@ -511,4 +283,4 @@ const gameConfig = {
 
 };
 
-export default gameConfig;
+export default masterConfig;

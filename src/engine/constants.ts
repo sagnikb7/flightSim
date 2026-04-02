@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import gameConfig from './gameConfig';
+import masterConfig from './masterConfig';
 
 export interface Biome {
   name: string;
@@ -24,7 +24,7 @@ export const BIOMES: Biome[] = [
   { name: "AZURE RIFT",     fog: 0x04091a, terrainType: 'CANYON'    },
 ];
 
-const cfg = gameConfig;
+const cfg = masterConfig;
 
 export const CONFIG = {
   ...cfg,

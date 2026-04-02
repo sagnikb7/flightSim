@@ -86,6 +86,17 @@ export class GameEngine {
   // Smoothed delta time to prevent jitter from chunk generation
   private smoothedDt = 1 / 60;
 
+  // Cached per-frame vectors — allocated once, mutated each frame to avoid GC pressure
+  private _fwd          = new THREE.Vector3(); // ship look-ahead direction
+  private _lookAheadPos = new THREE.Vector3(); // ship position + look-ahead
+  private _idealCamPos  = new THREE.Vector3(); // target camera position
+  private _shipUpVec    = new THREE.Vector3(); // ship local up for camera roll
+  private _camLookAt    = new THREE.Vector3(); // camera lookAt target
+  private _glowColor    = new THREE.Color(0x66ccff); // constant ship glow emissive
+
+  // Cached terrain height at ship position — computed once per frame, reused by checkCollisions
+  private _terrainHeightAtShip = 0;
+
   public onBiomeChange?: (name: string) => void;
   public onUpdateStats?: (stats: GameStats) => void;
   public onGameOver?: (reason: string) => void;
@@ -537,7 +548,7 @@ export class GameEngine {
       const intensity = glowTimer * glowCfg.intensityMultiplier;
       this.ship.group.traverse(obj => {
         if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
-          obj.material.emissive = new THREE.Color(0x66ccff);
+          obj.material.emissive.copy(this._glowColor);
           obj.material.emissiveIntensity = intensity;
         }
       });
@@ -630,8 +641,8 @@ export class GameEngine {
    * Basic AABB/Height check for terrain collision.
    */
   private checkCollisions() {
-    const terrainHeight = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) + CONFIG.terrain.groupYOffset;
-    if (this.ship.group.position.y < terrainHeight + CONFIG.altitude.collisionOffset) this.triggerDeath("CRASHED INTO TERRAIN");
+    // _terrainHeightAtShip is computed earlier in animate() — no second noise evaluation needed
+    if (this.ship.group.position.y < this._terrainHeightAtShip + CONFIG.altitude.collisionOffset) this.triggerDeath("CRASHED INTO TERRAIN");
   }
 
   /**
@@ -701,10 +712,12 @@ export class GameEngine {
 
     // --- 3. PROXIMITY & ALTITUDE LOGIC ---
     // Ray-like "look ahead" for collision warnings
-    const forward = new THREE.Vector3(0, 0, 10).applyQuaternion(this.ship.group.quaternion);
-    const lookAheadPos = this.ship.group.position.clone().add(forward);
-    const terrainHeightAtShip = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) + CONFIG.terrain.groupYOffset;
-    const terrainHeightAhead = this.terrain.getHeight(lookAheadPos.x, lookAheadPos.z) + CONFIG.terrain.groupYOffset;
+    this._fwd.set(0, 0, 10).applyQuaternion(this.ship.group.quaternion);
+    this._lookAheadPos.copy(this.ship.group.position).add(this._fwd);
+    // Cache ship terrain height — reused by checkCollisions() this frame (no second noise eval)
+    this._terrainHeightAtShip = this.terrain.getHeight(this.ship.group.position.x, this.ship.group.position.z) + CONFIG.terrain.groupYOffset;
+    const terrainHeightAtShip = this._terrainHeightAtShip;
+    const terrainHeightAhead = this.terrain.getHeight(this._lookAheadPos.x, this._lookAheadPos.z) + CONFIG.terrain.groupYOffset;
 
     let currentFuelDrain = this.fuelDrainRate;
     this.altWarning = "";
@@ -758,15 +771,15 @@ export class GameEngine {
 
     // --- 5. CAMERA ORCHESTRATION ---
     // Smooth camera following with lerp
-    const idealPos = CONFIG.cameraOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
+    this._idealCamPos.copy(CONFIG.cameraOffset).applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
     if (this.shakeTimer > 0) {
       const shakeStrength = this.shakeTimer * motionCfg.shakeStrengthMultiplier;
-      idealPos.x += (Math.random() - 0.5) * shakeStrength;
-      idealPos.y += (Math.random() - 0.5) * shakeStrength;
-      idealPos.z += (Math.random() - 0.5) * shakeStrength;
+      this._idealCamPos.x += (Math.random() - 0.5) * shakeStrength;
+      this._idealCamPos.y += (Math.random() - 0.5) * shakeStrength;
+      this._idealCamPos.z += (Math.random() - 0.5) * shakeStrength;
       this.shakeTimer -= dt;
     }
-    this.camera.position.lerp(idealPos, CONFIG.camera.lerp);
+    this.camera.position.lerp(this._idealCamPos, CONFIG.camera.lerp);
 
     // Safety: Prevent camera from clipping into terrain
     const terrainHeightAtCamera = this.terrain.getHeight(this.camera.position.x, this.camera.position.z) + CONFIG.terrain.groupYOffset;
@@ -775,10 +788,11 @@ export class GameEngine {
     }
 
     // Maintain camera 'up' relative to ship for smooth rolls
-    const shipUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.ship.group.quaternion);
-    this.camera.up.lerp(shipUp, CONFIG.camera.lerp);
+    this._shipUpVec.set(0, 1, 0).applyQuaternion(this.ship.group.quaternion);
+    this.camera.up.lerp(this._shipUpVec, CONFIG.camera.lerp);
 
-    this.camera.lookAt(CONFIG.cameraLookAtOffset.clone().applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position));
+    this._camLookAt.copy(CONFIG.cameraLookAtOffset).applyQuaternion(this.ship.group.quaternion).add(this.ship.group.position);
+    this.camera.lookAt(this._camLookAt);
 
     // --- 6. PLASMA RECHARGE SYSTEM ---
     const plasmaResult = this.plasmaManager.update(

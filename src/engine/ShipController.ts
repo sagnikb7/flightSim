@@ -22,6 +22,9 @@ export class ShipController {
     yaw: 0
   };
 
+  // Cached per-frame vector — allocated once, mutated each update() to avoid GC pressure
+  private _forward = new THREE.Vector3();
+
   constructor(upgrades: Upgrades) {
     this.shipModel = new ShipModel(upgrades.skin, upgrades.accentColor);
     this.group = this.shipModel.group;
@@ -64,7 +67,7 @@ export class ShipController {
     );
 
     // Speed Logic
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(this.group.quaternion);
+    const forward = this._forward.set(0, 0, 1).applyQuaternion(this.group.quaternion);
     const isClimbing = forward.y > 0.1;
     const isDiving = forward.y < -0.1;
 

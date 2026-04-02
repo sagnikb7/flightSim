@@ -117,6 +117,10 @@ export class TerrainManager {
   private currentSunIntensity: number;
   private targetSunIntensity: number;
 
+  // Cached fog colors for biome transition lerp — set once per transition, reused every frame
+  private _fromFogColor = new THREE.Color();
+  private _toFogColor   = new THREE.Color();
+
   /** Fired when the player crosses into a new biome. GameEngine uses this to show the zone name. */
   public onBiomeChange?: (name: string) => void;
 
@@ -129,7 +133,7 @@ export class TerrainManager {
     // Apply the starting biome's visuals immediately
     const startBiome = BIOMES[this.biomeOffset % BIOMES.length];
     this.fog.color.set(startBiome.fog);
-    // Sun colour is fixed in gameConfig (visuals.sun.color) — not per-biome
+    // Sun colour is fixed in ModuleConfigs/lightConfig.ts (sun.color) — not per-biome
     // Sun intensity is managed by the random walk — initialised below
 
     // Pick the active palette (forced or random) and set the initial shade position
@@ -299,10 +303,14 @@ export class TerrainManager {
         group.traverse((obj) => {
           if (obj instanceof THREE.Mesh) {
             obj.geometry.dispose();
-            if (Array.isArray(obj.material)) {
-              obj.material.forEach((m) => m.dispose());
-            } else {
-              obj.material.dispose();
+            // Skip the shared terrain surface material — it lives across all chunks.
+            // Only dispose per-rock materials (unique per instance).
+            if (obj.material !== this.terrainMaterial) {
+              if (Array.isArray(obj.material)) {
+                obj.material.forEach((m) => m.dispose());
+              } else {
+                obj.material.dispose();
+              }
             }
           }
         });
@@ -704,16 +712,16 @@ export class TerrainManager {
       this.hopShade();
       this.hopSunIntensity();
       this.onBiomeChange?.(this.biomeAt(this.nextBiomeIndex).name);
+      // Cache fog endpoints once — reused every frame during this transition
+      this._fromFogColor.set(this.biomeAt(this.currentBiomeIndex).fog);
+      this._toFogColor.set(this.biomeAt(this.nextBiomeIndex).fog);
     }
 
     // Interpolate fog and sun toward the target biome
     if (this.biomeTransition < 1) {
       this.biomeTransition += CONFIG.terrain.biomes.transitionSpeed;
 
-      const from = this.biomeAt(this.currentBiomeIndex);
-      const to   = this.biomeAt(this.nextBiomeIndex);
-
-      this.fog.color.lerpColors(new THREE.Color(from.fog), new THREE.Color(to.fog), this.biomeTransition);
+      this.fog.color.lerpColors(this._fromFogColor, this._toFogColor, this.biomeTransition);
       this.sun.intensity = THREE.MathUtils.lerp(this.currentSunIntensity, this.targetSunIntensity, this.biomeTransition);
 
       if (this.biomeTransition >= 1) {
